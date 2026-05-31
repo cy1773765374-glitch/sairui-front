@@ -1,6 +1,6 @@
 # openclaw-userlook backend
 
-Phase 02 adds MySQL configuration, SQLAlchemy ORM models, a table initialization script, and database health checks. Login, WebSocket, and Agent invocation are intentionally not implemented in this phase.
+Phase 03 adds internal user registration, password login, JWT authentication, default admin seeding, and admin user approval. WebSocket chat and OpenClaw invocation are intentionally not implemented in this phase.
 
 ## Requirements
 
@@ -32,6 +32,8 @@ Initialize tables:
 ```bash
 python -m app.init_db
 ```
+
+This also creates the default admin user when `DEFAULT_ADMIN_USERNAME` does not exist. The admin is created with `status=active` and `role=admin`.
 
 ## Run
 
@@ -67,4 +69,44 @@ Expected response when MySQL is reachable:
   "status": "ok",
   "database": "connected"
 }
+```
+
+## Authentication
+
+Register a user:
+
+```bash
+curl -X POST http://127.0.0.1:10009/api/auth/register ^
+  -H "Content-Type: application/json" ^
+  -d "{\"username\":\"zhangsan\",\"password\":\"Admin@123456\",\"display_name\":\"张三\"}"
+```
+
+Login:
+
+```bash
+curl -X POST http://127.0.0.1:10009/api/auth/login ^
+  -H "Content-Type: application/json" ^
+  -d "{\"username\":\"admin\",\"password\":\"Admin@123456\"}"
+```
+
+Admin endpoints require `Authorization: Bearer <token>`:
+
+- `GET /api/admin/users`
+- `POST /api/admin/users/{user_id}/approve`
+- `POST /api/admin/users/{user_id}/disable`
+
+## Environment
+
+- `JWT_SECRET_KEY`
+- `JWT_ALGORITHM`
+- `ACCESS_TOKEN_EXPIRE_MINUTES`
+- `DEFAULT_ADMIN_USERNAME`
+- `DEFAULT_ADMIN_PASSWORD`
+
+## Verification
+
+```bash
+.\.venv\Scripts\python.exe -m compileall app
+.\.venv\Scripts\python.exe -c "import app.main; print('ok')"
+.\.venv\Scripts\python.exe -c "from app.core.security import hash_password, verify_password; h=hash_password('Admin@123456'); print(verify_password('Admin@123456', h))"
 ```

@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import { fetchHealth, type HealthResponse } from '../api/health'
 import { useAppStore } from '../stores/app'
+import { useAuthStore } from '../stores/auth'
 
 const appStore = useAppStore()
+const authStore = useAuthStore()
+const router = useRouter()
 const loading = ref(false)
 const health = ref<HealthResponse | null>(null)
 const errorMessage = ref('')
@@ -16,13 +20,18 @@ async function loadHealth() {
 
   try {
     health.value = await fetchHealth()
-  } catch (error) {
+  } catch {
     health.value = null
     errorMessage.value = '后端健康检查失败'
     ElMessage.error(errorMessage.value)
   } finally {
     loading.value = false
   }
+}
+
+function logout() {
+  authStore.logout()
+  router.push({ name: 'login' })
 }
 
 onMounted(loadHealth)
@@ -36,10 +45,38 @@ onMounted(loadHealth)
           <h1>{{ appStore.systemName }}</h1>
           <p>当前版本：{{ appStore.phase }}</p>
         </div>
-        <el-button type="primary" :loading="loading" @click="loadHealth">
-          刷新状态
-        </el-button>
+        <div class="header-actions">
+          <el-button v-if="authStore.isAdmin" @click="router.push({ name: 'admin-users' })">
+            用户审核
+          </el-button>
+          <el-button type="primary" :loading="loading" @click="loadHealth">
+            刷新状态
+          </el-button>
+          <el-button @click="logout">退出</el-button>
+        </div>
       </div>
+
+      <el-card class="status-card" shadow="never">
+        <template #header>
+          <div class="card-header">
+            <span>当前用户</span>
+            <el-tag v-if="authStore.user" :type="authStore.isAdmin ? 'warning' : 'success'">
+              {{ authStore.user.role }}
+            </el-tag>
+          </div>
+        </template>
+        <el-descriptions v-if="authStore.user" :column="1" border>
+          <el-descriptions-item label="用户名">
+            {{ authStore.user.username }}
+          </el-descriptions-item>
+          <el-descriptions-item label="显示名称">
+            {{ authStore.user.display_name }}
+          </el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag type="success">{{ authStore.user.status }}</el-tag>
+          </el-descriptions-item>
+        </el-descriptions>
+      </el-card>
 
       <el-card class="status-card" shadow="never">
         <template #header>
@@ -87,6 +124,13 @@ onMounted(loadHealth)
   margin-bottom: 24px;
 }
 
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 h1 {
   margin: 0;
   font-size: 30px;
@@ -100,7 +144,15 @@ p {
 }
 
 .status-card {
+  margin-top: 16px;
   border-radius: 8px;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 
 @media (max-width: 640px) {
@@ -111,6 +163,10 @@ p {
 
   .header-row {
     flex-direction: column;
+  }
+
+  .header-actions {
+    justify-content: flex-start;
   }
 
   h1 {

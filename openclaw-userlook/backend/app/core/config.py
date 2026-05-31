@@ -17,6 +17,11 @@ class Settings(BaseSettings):
         default="mysql+pymysql://user:password@127.0.0.1:3306/openclaw_userlook?charset=utf8mb4",
         alias="DATABASE_URL",
     )
+    jwt_secret_key: str = Field(default="please-change-this", alias="JWT_SECRET_KEY")
+    jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
+    access_token_expire_minutes: int = Field(default=1440, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
+    default_admin_username: str = Field(default="admin", alias="DEFAULT_ADMIN_USERNAME")
+    default_admin_password: str = Field(default="Admin@123456", alias="DEFAULT_ADMIN_PASSWORD")
     cors_origins: list[str] = [
         "http://127.0.0.1:10010",
         "http://localhost:10010",
