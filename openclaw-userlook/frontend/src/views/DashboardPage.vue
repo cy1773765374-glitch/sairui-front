@@ -49,6 +49,12 @@ onMounted(loadHealth)
           <el-button type="primary" @click="router.push({ name: 'agents' })">
             Agent 工作台
           </el-button>
+          <el-button @click="router.push({ name: 'runs' })">
+            任务中心
+          </el-button>
+          <el-button @click="router.push({ name: 'files' })">
+            文件中心
+          </el-button>
           <el-button v-if="authStore.isAdmin" @click="router.push({ name: 'admin-agents' })">
             Agent 管理
           </el-button>

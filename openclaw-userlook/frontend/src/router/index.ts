@@ -6,8 +6,10 @@ import AdminUsersPage from '../views/AdminUsersPage.vue'
 import AgentsPage from '../views/AgentsPage.vue'
 import ChatPage from '../views/ChatPage.vue'
 import DashboardPage from '../views/DashboardPage.vue'
+import FilesPage from '../views/FilesPage.vue'
 import LoginPage from '../views/LoginPage.vue'
 import RegisterPage from '../views/RegisterPage.vue'
+import RunsPage from '../views/RunsPage.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -28,6 +30,18 @@ const router = createRouter({
       path: '/agents/:agentCode/chat',
       name: 'agent-chat',
       component: ChatPage,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/runs',
+      name: 'runs',
+      component: RunsPage,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/files',
+      name: 'files',
+      component: FilesPage,
       meta: { requiresAuth: true },
     },
     {

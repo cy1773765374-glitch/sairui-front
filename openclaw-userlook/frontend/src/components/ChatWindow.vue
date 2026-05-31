@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { Connection, Promotion } from '@element-plus/icons-vue'
+import { Close, Connection, Promotion } from '@element-plus/icons-vue'
 
+import { formatFileSize, type UserFile } from '../api/files'
+import type { TaskRunStatus } from '../api/runs'
 import type { LocalMessage } from '../api/conversations'
+import FileUploader from './FileUploader.vue'
 import MessageBubble from './MessageBubble.vue'
+import RunStatus from './RunStatus.vue'
 
 const props = defineProps<{
   title: string
@@ -13,10 +17,17 @@ const props = defineProps<{
   sending: boolean
   loading: boolean
   errorMessage: string
+  attachedFiles: UserFile[]
+  runId: number | null
+  runStatus: TaskRunStatus | ''
+  runStatusMessage: string
+  outputFiles: UserFile[]
 }>()
 
 const emit = defineEmits<{
-  send: [content: string]
+  send: [content: string, fileIds: number[]]
+  fileUploaded: [file: UserFile]
+  removeFile: [fileId: number]
 }>()
 
 const draft = ref('')
@@ -30,7 +41,7 @@ function send() {
     return
   }
   draft.value = ''
-  emit('send', content)
+  emit('send', content, props.attachedFiles.map((file) => file.id))
 }
 
 async function scrollToBottom() {
@@ -59,6 +70,13 @@ watch(
       </el-tag>
     </header>
 
+    <RunStatus
+      :run-id="runId"
+      :status="runStatus"
+      :message="runStatusMessage"
+      :output-files="outputFiles"
+    />
+
     <div ref="scrollRef" class="message-list">
       <el-alert
         v-if="errorMessage"
@@ -80,6 +98,26 @@ watch(
 
     <footer class="composer">
       <div v-if="sending" class="response-status">Agent 正在响应</div>
+      <div class="attachment-row">
+        <FileUploader @uploaded="(file) => emit('fileUploaded', file)" />
+        <el-tag
+          v-for="file in attachedFiles"
+          :key="file.id"
+          class="attachment-tag"
+          closable
+          @close="emit('removeFile', file.id)"
+        >
+          {{ file.original_name }} · {{ formatFileSize(file.file_size) }}
+        </el-tag>
+        <el-button
+          v-if="attachedFiles.length"
+          link
+          :icon="Close"
+          @click="attachedFiles.forEach((file) => emit('removeFile', file.id))"
+        >
+          清空
+        </el-button>
+      </div>
       <el-input
         v-model="draft"
         class="composer-input"
@@ -109,7 +147,7 @@ watch(
 <style scoped>
 .chat-window {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   height: calc(100vh - 96px);
   min-height: 560px;
   border: 1px solid #d9e2ec;
@@ -168,6 +206,25 @@ p {
   color: #667085;
   font-size: 13px;
   line-height: 18px;
+}
+
+.attachment-row {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.attachment-tag {
+  max-width: 260px;
+}
+
+.attachment-tag :deep(.el-tag__content) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .composer-input {
