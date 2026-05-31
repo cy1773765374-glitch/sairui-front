@@ -2,7 +2,7 @@
 
 `openclaw-userlook` is an OpenClaw multi-Agent enterprise workspace.
 
-Phase 05 adds the FastAPI WebSocket chat foundation on top of Phase 04. The browser can create conversations, connect to FastAPI by WebSocket, save user/assistant messages, receive mock streaming assistant output, and reload message history. OpenClaw Gateway invocation, file upload, task execution, and WeCom login are intentionally not implemented yet.
+Phase 06 connects the Phase 05 FastAPI WebSocket chat path to OpenClaw Gateway through a backend-only adapter. The browser still connects only to FastAPI; FastAPI calls OpenClaw Gateway at `OPENCLAW_GATEWAY_WS_URL` and forwards `assistant_delta`, `assistant_done`, `run_status`, and `error` events. File upload, task execution, and WeCom login are intentionally not implemented yet.
 
 ## Stack
 
@@ -122,7 +122,11 @@ Chat WebSocket:
 
 - `WS /api/ws/conversations/{conversation_id}?token={JWT}` connects the browser to FastAPI.
 - Browser messages use `{"type":"user_message","content":"你好","file_ids":[]}`.
-- The current phase returns mock streaming events through `assistant_delta`, saves the assistant message, then sends `assistant_done`.
+- With `MOCK_OPENCLAW=true`, FastAPI returns the Phase 05 mock streaming reply.
+- With `MOCK_OPENCLAW=false`, FastAPI calls OpenClaw Gateway through `OpenClawAdapter` and `OpenClawGatewayClient`.
+- Gateway address, token, and protocol details stay in the backend and are never returned to the browser.
+- Each user Agent call records an `audit_logs` row with `action=agent.invoke`.
+- If Gateway cannot be reached, the browser receives: `OpenClaw Gateway 连接失败，请检查 openclaw-gateway.service 是否运行`.
 
 Preset Agents can also be initialized independently:
 
@@ -150,6 +154,9 @@ Backend `.env` values:
 - `BACKEND_HOST`
 - `BACKEND_PORT`
 - `OPENCLAW_GATEWAY_WS_URL`
+- `OPENCLAW_GATEWAY_TOKEN`
+- `OPENCLAW_GATEWAY_TIMEOUT_SECONDS`
+- `MOCK_OPENCLAW`
 - `DATABASE_URL`
 - `JWT_SECRET_KEY`
 - `JWT_ALGORITHM`

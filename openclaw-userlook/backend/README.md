@@ -1,6 +1,6 @@
 # openclaw-userlook backend
 
-Phase 04 adds Agent registry seeding, visible Agent list APIs, admin enable/disable controls, and Agent permission grants. WebSocket chat, OpenClaw invocation, file upload, and task execution are intentionally not implemented in this phase.
+Phase 06 keeps the browser-facing FastAPI WebSocket chat API from Phase 05 and adds a backend-only OpenClaw Gateway adapter. `MOCK_OPENCLAW=true` keeps the Phase 05 mock stream available; `MOCK_OPENCLAW=false` sends chat requests from FastAPI to OpenClaw Gateway over WebSocket.
 
 ## Requirements
 
@@ -135,11 +135,31 @@ curl -X POST http://127.0.0.1:10009/api/admin/agents/main/permissions ^
 
 ## Environment
 
+- `OPENCLAW_GATEWAY_WS_URL`
+- `OPENCLAW_GATEWAY_TOKEN`
+- `OPENCLAW_GATEWAY_TIMEOUT_SECONDS`
+- `MOCK_OPENCLAW`
 - `JWT_SECRET_KEY`
 - `JWT_ALGORITHM`
 - `ACCESS_TOKEN_EXPIRE_MINUTES`
 - `DEFAULT_ADMIN_USERNAME`
 - `DEFAULT_ADMIN_PASSWORD`
+
+## Chat Gateway
+
+The browser only connects to:
+
+```text
+WS /api/ws/conversations/{conversation_id}?token={JWT}
+```
+
+`ws_chat.py` saves the user message, records `audit_logs.action=agent.invoke`, then calls `OpenClawAdapter`. The adapter either streams the mock reply or delegates to `OpenClawGatewayClient`, which owns the Gateway URL, token header, request payload, and response parsing.
+
+Gateway failure is returned to the browser as:
+
+```text
+OpenClaw Gateway 连接失败，请检查 openclaw-gateway.service 是否运行
+```
 
 ## Verification
 

@@ -13,6 +13,12 @@ class Settings(BaseSettings):
         default="ws://127.0.0.1:18789",
         alias="OPENCLAW_GATEWAY_WS_URL",
     )
+    openclaw_gateway_token: str = Field(default="", alias="OPENCLAW_GATEWAY_TOKEN")
+    openclaw_gateway_timeout_seconds: int = Field(
+        default=300,
+        alias="OPENCLAW_GATEWAY_TIMEOUT_SECONDS",
+    )
+    mock_openclaw: bool = Field(default=True, alias="MOCK_OPENCLAW")
     database_url: str = Field(
         default="mysql+pymysql://user:password@127.0.0.1:3306/openclaw_userlook?charset=utf8mb4",
         alias="DATABASE_URL",

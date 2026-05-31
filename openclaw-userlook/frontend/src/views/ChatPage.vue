@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { fetchAgent, type Agent } from '../api/agents'
 import {
@@ -18,6 +18,7 @@ import { useAuthStore } from '../stores/auth'
 type ServerWsMessage =
   | { type: 'assistant_delta'; content: string }
   | { type: 'assistant_done'; message_id: number }
+  | { type: 'run_status'; status: string; message?: string }
   | { type: 'error'; message: string }
 
 const route = useRoute()
@@ -31,6 +32,8 @@ const agent = ref<Agent | null>(null)
 const conversation = ref<Conversation | null>(null)
 const messages = ref<LocalMessage[]>([])
 const activeAssistantMessageId = ref<string | null>(null)
+const errorMessage = ref('')
+const highRiskConfirmed = ref(false)
 let socket: WebSocket | null = null
 
 const title = computed(() => conversation.value?.title ?? agent.value?.name ?? 'Agent 对话')
@@ -74,6 +77,7 @@ function connectWebSocket(conversationId: number) {
 
   socket.onopen = () => {
     connected.value = true
+    errorMessage.value = ''
   }
 
   socket.onclose = () => {
@@ -91,6 +95,7 @@ function connectWebSocket(conversationId: number) {
   socket.onmessage = async (event) => {
     const payload = JSON.parse(event.data) as ServerWsMessage
     if (payload.type === 'assistant_delta') {
+      errorMessage.value = ''
       if (!activeAssistantMessageId.value) {
         activeAssistantMessageId.value = `assistant-${Date.now()}`
         messages.value.push({
@@ -109,6 +114,11 @@ function connectWebSocket(conversationId: number) {
       return
     }
 
+    if (payload.type === 'run_status') {
+      sending.value = payload.status !== 'done' && payload.status !== 'idle'
+      return
+    }
+
     if (payload.type === 'assistant_done') {
       const target = messages.value.find((message) => message.id === activeAssistantMessageId.value)
       if (target) {
@@ -123,18 +133,42 @@ function connectWebSocket(conversationId: number) {
       return
     }
 
+    errorMessage.value = payload.message
     ElMessage.error(payload.message)
+    const target = messages.value.find((message) => message.id === activeAssistantMessageId.value)
+    if (target) {
+      target.streaming = false
+    }
+    activeAssistantMessageId.value = null
     sending.value = false
   }
 }
 
-function sendMessage(content: string) {
+async function sendMessage(content: string) {
   if (!socket || socket.readyState !== WebSocket.OPEN || !conversation.value) {
     ElMessage.error('WebSocket 未连接')
     return
   }
 
+  if (agent.value?.risk_level === 'high' && !highRiskConfirmed.value) {
+    try {
+      await ElMessageBox.confirm(
+        '该 Agent 可能访问数据库、飞书或执行高风险操作，是否继续？',
+        '高风险 Agent 确认',
+        {
+          confirmButtonText: '继续',
+          cancelButtonText: '取消',
+          type: 'warning',
+        },
+      )
+      highRiskConfirmed.value = true
+    } catch {
+      return
+    }
+  }
+
   sending.value = true
+  errorMessage.value = ''
   messages.value.push({
     id: `user-${Date.now()}`,
     conversation_id: conversation.value.id,
@@ -152,6 +186,23 @@ function sendMessage(content: string) {
   )
 }
 
+async function confirmHighRiskAgent(currentAgent: Agent) {
+  if (currentAgent.risk_level !== 'high' || highRiskConfirmed.value) {
+    return
+  }
+
+  await ElMessageBox.confirm(
+    '该 Agent 可能访问数据库、飞书或执行高风险操作，是否继续？',
+    '高风险 Agent 确认',
+    {
+      confirmButtonText: '继续',
+      cancelButtonText: '取消',
+      type: 'warning',
+    },
+  )
+  highRiskConfirmed.value = true
+}
+
 async function initialize() {
   loading.value = true
   try {
@@ -161,11 +212,16 @@ async function initialize() {
     }
 
     agent.value = await fetchAgent(agentCode)
+    await confirmHighRiskAgent(agent.value)
     await ensureConversation(agent.value)
     if (conversation.value) {
       connectWebSocket(conversation.value.id)
     }
-  } catch {
+  } catch (error) {
+    if (String(error) === 'cancel') {
+      router.push({ name: 'agents' })
+      return
+    }
     ElMessage.error('对话初始化失败')
     router.push({ name: 'agents' })
   } finally {
@@ -199,6 +255,7 @@ onBeforeUnmount(() => {
       :connected="connected"
       :sending="sending"
       :loading="loading"
+      :error-message="errorMessage"
       @send="sendMessage"
     />
   </main>
