@@ -5,12 +5,15 @@ import AdminPage from '../views/AdminPage.vue'
 import AdminAgentsPage from '../views/AdminAgentsPage.vue'
 import AdminUsersPage from '../views/AdminUsersPage.vue'
 import AgentsPage from '../views/AgentsPage.vue'
+import AuthCallbackPage from '../views/AuthCallbackPage.vue'
 import ChatPage from '../views/ChatPage.vue'
 import DashboardPage from '../views/DashboardPage.vue'
 import FilesPage from '../views/FilesPage.vue'
 import LoginPage from '../views/LoginPage.vue'
 import RegisterPage from '../views/RegisterPage.vue'
 import RunsPage from '../views/RunsPage.vue'
+import WecomLoginPage from '../views/WecomLoginPage.vue'
+import { isWeComWebView } from '../utils/env'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -52,6 +55,17 @@ const router = createRouter({
       meta: { guestOnly: true },
     },
     {
+      path: '/wecom/login',
+      name: 'wecom-login',
+      component: WecomLoginPage,
+      meta: { guestOnly: true },
+    },
+    {
+      path: '/wecom/callback',
+      name: 'wecom-callback',
+      component: AuthCallbackPage,
+    },
+    {
       path: '/register',
       name: 'register',
       component: RegisterPage,
@@ -90,6 +104,12 @@ router.beforeEach(async (to) => {
   }
 
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
+    if (isWeComWebView()) {
+      return {
+        name: 'wecom-login',
+        query: { redirect: to.fullPath },
+      }
+    }
     return {
       name: 'login',
       query: { redirect: to.fullPath },

@@ -1,18 +1,33 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
+import { fetchWeComLoginUrl } from '../api/wecom'
 import { useAuthStore } from '../stores/auth'
+import { isWeComWebView } from '../utils/env'
 
 const authStore = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 const loading = ref(false)
+const wecomLoading = ref(false)
 const form = reactive({
   username: '',
   password: '',
 })
+
+async function startWeComLogin() {
+  wecomLoading.value = true
+  try {
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
+    const response = await fetchWeComLoginUrl(redirect)
+    window.location.href = response.login_url
+  } catch {
+    ElMessage.error('企业微信授权地址获取失败')
+    wecomLoading.value = false
+  }
+}
 
 async function submitLogin() {
   loading.value = true
@@ -26,6 +41,12 @@ async function submitLogin() {
     loading.value = false
   }
 }
+
+onMounted(() => {
+  if (!authStore.token && isWeComWebView()) {
+    startWeComLogin()
+  }
+})
 </script>
 
 <template>
@@ -33,6 +54,15 @@ async function submitLogin() {
     <section class="auth-panel">
       <h1>登录</h1>
       <p>使用已通过管理员审核的内部账号进入系统。</p>
+
+      <el-alert
+        v-if="wecomLoading"
+        class="wecom-alert"
+        title="正在发起企业微信免登录"
+        type="info"
+        show-icon
+        :closable="false"
+      />
 
       <el-form label-position="top" @submit.prevent="submitLogin">
         <el-form-item label="用户名">
@@ -50,6 +80,10 @@ async function submitLogin() {
         没有账号？
         <RouterLink to="/register">申请注册</RouterLink>
       </div>
+
+      <el-button class="wecom-button" link :loading="wecomLoading" @click="startWeComLogin">
+        企业微信免登录
+      </el-button>
     </section>
   </main>
 </template>
@@ -92,5 +126,14 @@ p {
   margin-top: 18px;
   text-align: center;
   color: #667085;
+}
+
+.wecom-alert {
+  margin-bottom: 18px;
+}
+
+.wecom-button {
+  width: 100%;
+  margin-top: 12px;
 }
 </style>

@@ -18,7 +18,11 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
     return password_context.verify(plain_password, password_hash)
 
 
-def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:
+def create_access_token(
+    subject: str,
+    expires_delta: timedelta | None = None,
+    extra_claims: dict[str, Any] | None = None,
+) -> str:
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=settings.access_token_expire_minutes)
     )
@@ -26,6 +30,8 @@ def create_access_token(subject: str, expires_delta: timedelta | None = None) ->
         "sub": subject,
         "exp": expire,
     }
+    if extra_claims:
+        payload.update({key: value for key, value in extra_claims.items() if key not in {"sub", "exp"}})
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
