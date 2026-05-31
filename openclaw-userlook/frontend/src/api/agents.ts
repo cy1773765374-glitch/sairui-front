@@ -36,6 +36,11 @@ export async function fetchAgents(): Promise<Agent[]> {
   return response.data
 }
 
+export async function fetchAgent(agentCode: string): Promise<Agent> {
+  const response = await apiClient.get<Agent>(`/api/agents/${agentCode}`)
+  return response.data
+}
+
 export async function fetchAdminAgents(): Promise<Agent[]> {
   const response = await apiClient.get<Agent[]>('/api/admin/agents')
   return response.data

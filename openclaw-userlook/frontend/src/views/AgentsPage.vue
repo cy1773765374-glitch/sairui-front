@@ -28,6 +28,10 @@ function logout() {
   router.push({ name: 'login' })
 }
 
+function openChat(agent: Agent) {
+  router.push({ name: 'agent-chat', params: { agentCode: agent.code } })
+}
+
 onMounted(loadAgents)
 </script>
 
@@ -55,7 +59,12 @@ onMounted(loadAgents)
         description="暂无可访问的 Agent，请联系管理员授权。"
       />
       <div v-else class="agent-grid">
-        <AgentCard v-for="agent in agents" :key="agent.code" :agent="agent" />
+        <AgentCard
+          v-for="agent in agents"
+          :key="agent.code"
+          :agent="agent"
+          @open-chat="openChat"
+        />
       </div>
     </section>
   </main>

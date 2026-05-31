@@ -2,7 +2,7 @@
 
 `openclaw-userlook` is an OpenClaw multi-Agent enterprise workspace.
 
-Phase 04 adds the Agent registry, visible Agent list, Agent enable/disable controls, and Agent permission grants. WebSocket chat, OpenClaw invocation, file upload, task execution, and WeCom login are intentionally not implemented yet.
+Phase 05 adds the FastAPI WebSocket chat foundation on top of Phase 04. The browser can create conversations, connect to FastAPI by WebSocket, save user/assistant messages, receive mock streaming assistant output, and reload message history. OpenClaw Gateway invocation, file upload, task execution, and WeCom login are intentionally not implemented yet.
 
 ## Stack
 
@@ -112,6 +112,18 @@ Agent endpoints:
 - `POST /api/admin/agents/{agent_id}/disable` disables an Agent.
 - `POST /api/admin/agents/{agent_id}/permissions` grants an Agent to one `user_id` or one `role`.
 
+Conversation endpoints:
+
+- `POST /api/conversations` creates a conversation for an authorized Agent and generates a `web:{user_id}:{agent_code}:{conversation_id}` session key.
+- `GET /api/conversations` lists the current user's conversations.
+- `GET /api/conversations/{conversation_id}` returns conversation detail and message history. Users can only read their own conversations; admins can read all conversations.
+
+Chat WebSocket:
+
+- `WS /api/ws/conversations/{conversation_id}?token={JWT}` connects the browser to FastAPI.
+- Browser messages use `{"type":"user_message","content":"你好","file_ids":[]}`.
+- The current phase returns mock streaming events through `assistant_delta`, saves the assistant message, then sends `assistant_done`.
+
 Preset Agents can also be initialized independently:
 
 ```bash
@@ -127,7 +139,7 @@ copy .env.example .env
 npm run dev -- --host 127.0.0.1 --port 10010
 ```
 
-Open `http://127.0.0.1:10010`, log in with the default admin, register a normal user, approve that user from the admin user page, grant Agent permissions from the Agent management page, then confirm the approved user only sees authorized Agents.
+Open `http://127.0.0.1:10010`, log in with the default admin, register a normal user, approve that user from the admin user page, grant Agent permissions from the Agent management page, then confirm the approved user only sees authorized Agents. Click an Agent card's chat action to create or reuse a conversation and verify mock streaming replies.
 
 ## Environment
 
