@@ -123,6 +123,11 @@ onMounted(loadDashboard)
             <el-descriptions-item label="账号状态">
               <el-tag type="success" effect="plain">{{ authStore.user.status }}</el-tag>
             </el-descriptions-item>
+            <el-descriptions-item label="登录来源">
+              <el-tag :type="authStore.loginSource === 'wecom' ? 'primary' : 'info'" effect="plain">
+                {{ authStore.loginSource }}
+              </el-tag>
+            </el-descriptions-item>
           </el-descriptions>
         </el-card>
       </el-col>

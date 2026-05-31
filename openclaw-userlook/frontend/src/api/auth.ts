@@ -28,6 +28,7 @@ export interface LoginResponse {
   access_token: string
   token_type: string
   user: User
+  login_source?: 'password' | 'wecom'
 }
 
 export async function register(payload: RegisterPayload): Promise<User> {

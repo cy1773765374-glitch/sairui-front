@@ -2,7 +2,7 @@
 
 `openclaw-userlook` is an OpenClaw multi-Agent enterprise workspace.
 
-Phase 08 builds on the Phase 07 FastAPI WebSocket chat path and upgrades the frontend into an enterprise OpenClaw multi-Agent workspace. It adds a unified Element Plus workbench shell, Dashboard overview, searchable Agent marketplace, three-column chat workspace, task center, file center, and admin entry page. The browser still connects only to FastAPI; FastAPI calls OpenClaw Gateway at `OPENCLAW_GATEWAY_WS_URL` and forwards `assistant_delta`, `assistant_done`, `run_status`, and `error` events. WeCom login, Redis, Celery, and browser-to-Gateway direct access are intentionally not implemented.
+Phase 09 builds on the Phase 08 enterprise workspace and adds the foundation for embedding the frontend as a WeCom self-built application H5 page. The browser still connects only to FastAPI; FastAPI calls OpenClaw Gateway at `OPENCLAW_GATEWAY_WS_URL` and forwards `assistant_delta`, `assistant_done`, `run_status`, and `error` events. WeCom OAuth now has backend configuration, service-layer isolation, mock login, identity binding, JWT issuance, and audit logging. Redis, Celery, Feishu OAuth, WeCom JS-SDK, directory sync, message push, and browser-to-Gateway direct access are intentionally not implemented.
 
 ## Stack
 
@@ -103,6 +103,9 @@ Authentication endpoints:
 - `POST /api/auth/register` creates a `pending` user.
 - `POST /api/auth/login` returns a JWT only for `active` users.
 - `GET /api/auth/me` returns the current JWT user.
+- `GET /api/wecom/login-url` returns a WeCom OAuth URL. With `WECOM_MOCK_LOGIN=true`, it returns a mock callback URL.
+- `GET /api/wecom/callback?code=...&state=...` resolves the WeCom identity, writes `identity_bindings(provider=wecom)`, and returns a JWT for active users. New WeCom users default to `WECOM_DEFAULT_USER_STATUS`, which is `pending` in the example config.
+- `GET /api/wecom/me` returns the current user's WeCom binding information.
 - `GET /api/admin/users` lists users for admins.
 - `POST /api/admin/users/{user_id}/approve` activates a user.
 - `POST /api/admin/users/{user_id}/disable` disables a user.
@@ -157,6 +160,14 @@ Phase 08 frontend workspace:
 - Task center and file center use Element Plus tables for status, timestamps, output files, file metadata, and authenticated downloads.
 - Admin users see the admin entry page, user management, and Agent management menus; normal users do not.
 
+Phase 09 WeCom H5 foundation:
+
+- `src/utils/env.ts` detects the WeCom WebView by user agent.
+- Visiting protected pages inside WeCom without a token routes to `/wecom/login`, which fetches `/api/wecom/login-url` and redirects to the returned authorization URL.
+- `/wecom/callback` exchanges `code` and `state` through FastAPI and stores the returned system JWT. The frontend never reads or stores `WECOM_SECRET`.
+- Normal browsers can keep using username/password login. The login page also exposes a WeCom login entry for development mock testing.
+- Dashboard shows the current login source as `password` or `wecom`.
+
 ## Frontend Setup
 
 ```bash
@@ -186,6 +197,12 @@ Backend `.env` values:
 - `ACCESS_TOKEN_EXPIRE_MINUTES`
 - `DEFAULT_ADMIN_USERNAME`
 - `DEFAULT_ADMIN_PASSWORD`
+- `WECOM_CORP_ID`
+- `WECOM_AGENT_ID`
+- `WECOM_SECRET`
+- `WECOM_REDIRECT_URI`
+- `WECOM_MOCK_LOGIN`
+- `WECOM_DEFAULT_USER_STATUS`
 
 Frontend `.env` values:
 

@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = Field(default=1440, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
     default_admin_username: str = Field(default="admin", alias="DEFAULT_ADMIN_USERNAME")
     default_admin_password: str = Field(default="Admin@123456", alias="DEFAULT_ADMIN_PASSWORD")
+    wecom_corp_id: str = Field(default="", alias="WECOM_CORP_ID")
+    wecom_agent_id: str = Field(default="", alias="WECOM_AGENT_ID")
+    wecom_secret: str = Field(default="", alias="WECOM_SECRET")
+    wecom_redirect_uri: str = Field(default="", alias="WECOM_REDIRECT_URI")
+    wecom_mock_login: bool = Field(default=True, alias="WECOM_MOCK_LOGIN")
+    wecom_default_user_status: str = Field(default="pending", alias="WECOM_DEFAULT_USER_STATUS")
     user_upload_root: str = Field(
         default="/data/openclaw-userlook/uploads",
         alias="USER_UPLOAD_ROOT",

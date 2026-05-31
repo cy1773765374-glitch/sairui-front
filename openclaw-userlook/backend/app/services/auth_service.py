@@ -55,7 +55,7 @@ def authenticate_user(db: Session, username: str, password: str) -> tuple[str, U
             detail="user is not active",
         )
 
-    return create_access_token(str(user.id)), user
+    return create_access_token(str(user.id), extra_claims={"login_source": "password"}), user
 
 
 def get_current_user(
