@@ -12,6 +12,7 @@ const props = defineProps<{
   connected: boolean
   sending: boolean
   loading: boolean
+  errorMessage: string
 }>()
 
 const emit = defineEmits<{
@@ -59,6 +60,14 @@ watch(
     </header>
 
     <div ref="scrollRef" class="message-list">
+      <el-alert
+        v-if="errorMessage"
+        class="chat-error"
+        :title="errorMessage"
+        type="error"
+        show-icon
+        :closable="false"
+      />
       <el-skeleton v-if="loading" :rows="5" animated />
       <el-empty v-else-if="messages.length === 0" description="暂无消息，发送一句开始对话。" />
       <MessageBubble
@@ -70,6 +79,7 @@ watch(
     </div>
 
     <footer class="composer">
+      <div v-if="sending" class="response-status">Agent 正在响应</div>
       <el-input
         v-model="draft"
         class="composer-input"
@@ -146,6 +156,18 @@ p {
   padding: 16px 20px;
   border-top: 1px solid #d9e2ec;
   background: #ffffff;
+}
+
+.chat-error {
+  flex: 0 0 auto;
+}
+
+.response-status {
+  grid-column: 1 / -1;
+  min-height: 18px;
+  color: #667085;
+  font-size: 13px;
+  line-height: 18px;
 }
 
 .composer-input {

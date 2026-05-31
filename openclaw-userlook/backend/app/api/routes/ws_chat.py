@@ -1,4 +1,4 @@
-import asyncio
+import json
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 from jose import JWTError
@@ -6,11 +6,15 @@ from pydantic import ValidationError
 
 from app.core.database import SessionLocal
 from app.core.security import decode_access_token
+from app.models.agent import Agent
+from app.models.audit_log import AuditLog
 from app.models.message import MessageRole
 from app.models.user import UserStatus
 from app.schemas.message import WebSocketUserMessage
+from app.services.agent_service import user_can_access_agent
 from app.services.auth_service import get_user_by_id
 from app.services.conversation_service import require_conversation_for_user, save_message
+from app.services.openclaw_adapter import OpenClawAdapter
 from app.services.ws_connection_manager import connection_manager
 
 router = APIRouter(tags=["ws-chat"])
@@ -20,6 +24,38 @@ async def _close_with_error(websocket: WebSocket, message: str) -> None:
     await websocket.accept()
     await websocket.send_json({"type": "error", "message": message})
     await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+
+
+def _record_agent_call_audit(
+    db,
+    *,
+    user_id: int,
+    agent: Agent,
+    conversation_id: int,
+    session_key: str,
+    file_ids: list[int],
+    ip: str | None,
+    user_agent: str | None,
+) -> None:
+    detail = {
+        "agent_code": agent.code,
+        "openclaw_agent_id": agent.openclaw_agent_id,
+        "conversation_id": conversation_id,
+        "session_key": session_key,
+        "file_ids": file_ids,
+    }
+    db.add(
+        AuditLog(
+            user_id=user_id,
+            action="agent.invoke",
+            target_type="agent",
+            target_id=agent.id,
+            detail=json.dumps(detail, ensure_ascii=False),
+            ip=ip,
+            user_agent=user_agent,
+        )
+    )
+    db.commit()
 
 
 @router.websocket("/ws/conversations/{conversation_id}")
@@ -53,7 +89,13 @@ async def chat_websocket(
             await _close_with_error(websocket, "conversation not found")
             return
 
+        agent = db.get(Agent, conversation.agent_id)
+        if agent is None or not user_can_access_agent(db, current_user, agent):
+            await _close_with_error(websocket, "agent not found")
+            return
+
         await connection_manager.connect(conversation.id, websocket)
+        adapter = OpenClawAdapter()
         try:
             while True:
                 raw_message = await websocket.receive_json()
@@ -66,6 +108,16 @@ async def chat_websocket(
                     )
                     continue
 
+                _record_agent_call_audit(
+                    db,
+                    user_id=current_user.id,
+                    agent=agent,
+                    conversation_id=conversation.id,
+                    session_key=conversation.session_key,
+                    file_ids=inbound_message.file_ids,
+                    ip=websocket.client.host if websocket.client else None,
+                    user_agent=websocket.headers.get("user-agent"),
+                )
                 save_message(
                     db,
                     conversation,
@@ -74,29 +126,77 @@ async def chat_websocket(
                     raw_payload=inbound_message.model_dump(),
                 )
 
-                mock_parts = ["正在处理...", " 已收到你的消息：", inbound_message.content, "。"]
                 assistant_content = ""
-                for part in mock_parts:
-                    assistant_content += part
-                    await connection_manager.send_json(
-                        websocket,
-                        {"type": "assistant_delta", "content": part},
-                    )
-                    await asyncio.sleep(0.2)
-
-                assistant_message = save_message(
-                    db,
-                    conversation,
-                    MessageRole.assistant,
-                    assistant_content,
-                    raw_payload={"mock": True},
-                )
                 await connection_manager.send_json(
                     websocket,
-                    {"type": "assistant_done", "message_id": assistant_message.id},
+                    {"type": "run_status", "status": "running"},
                 )
+                async for event in adapter.stream_chat(
+                    user=current_user,
+                    agent=agent,
+                    conversation=conversation,
+                    content=inbound_message.content,
+                    file_ids=inbound_message.file_ids,
+                ):
+                    if event.type == "delta":
+                        part = event.content or ""
+                        assistant_content += part
+                        await connection_manager.send_json(
+                            websocket,
+                            {"type": "assistant_delta", "content": part},
+                        )
+                        continue
+
+                    if event.type == "run_status":
+                        await connection_manager.send_json(
+                            websocket,
+                            {
+                                "type": "run_status",
+                                "status": event.status or "running",
+                                "message": event.content,
+                            },
+                        )
+                        continue
+
+                    if event.type == "error":
+                        await connection_manager.send_json(
+                            websocket,
+                            {"type": "error", "message": event.content or "OpenClaw 调用失败"},
+                        )
+                        if assistant_content:
+                            save_message(
+                                db,
+                                conversation,
+                                MessageRole.assistant,
+                                assistant_content,
+                                raw_payload={"error": True},
+                            )
+                        break
+
+                    assistant_message = save_message(
+                        db,
+                        conversation,
+                        MessageRole.assistant,
+                        assistant_content,
+                        raw_payload={"mock": adapter.settings.mock_openclaw},
+                    )
+                    await connection_manager.send_json(
+                        websocket,
+                        {"type": "assistant_done", "message_id": assistant_message.id},
+                    )
+                    await connection_manager.send_json(
+                        websocket,
+                        {"type": "run_status", "status": "done"},
+                    )
+                    break
         except WebSocketDisconnect:
             connection_manager.disconnect(conversation.id, websocket)
-        except Exception:
+        except Exception as exc:
             connection_manager.disconnect(conversation.id, websocket)
-            await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+            try:
+                await connection_manager.send_json(
+                    websocket,
+                    {"type": "error", "message": str(exc) or "WebSocket 内部错误"},
+                )
+            finally:
+                await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
