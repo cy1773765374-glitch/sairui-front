@@ -2,7 +2,7 @@
 
 `openclaw-userlook` is an OpenClaw multi-Agent enterprise workspace.
 
-Phase 03 adds internal user registration, password login, JWT authentication, default admin seeding, and admin user approval. Agent lists, WebSocket chat, OpenClaw invocation, and WeCom login are intentionally not implemented yet.
+Phase 04 adds the Agent registry, visible Agent list, Agent enable/disable controls, and Agent permission grants. WebSocket chat, OpenClaw invocation, file upload, task execution, and WeCom login are intentionally not implemented yet.
 
 ## Stack
 
@@ -53,7 +53,7 @@ Create the MySQL database before initializing tables:
 CREATE DATABASE openclaw_userlook CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-Set `DATABASE_URL` and JWT/admin values in `backend/.env`, then create tables and ensure the default admin exists:
+Set `DATABASE_URL` and JWT/admin values in `backend/.env`, then create tables and ensure the default admin and preset Agents exist:
 
 ```bash
 python -m app.init_db
@@ -103,6 +103,21 @@ Authentication endpoints:
 - `POST /api/admin/users/{user_id}/approve` activates a user.
 - `POST /api/admin/users/{user_id}/disable` disables a user.
 
+Agent endpoints:
+
+- `GET /api/agents` lists enabled Agents visible to the current user.
+- `GET /api/agents/{agent_id}` returns one visible Agent by Agent code.
+- `GET /api/admin/agents` lists all Agents for admins, including disabled Agents.
+- `POST /api/admin/agents/{agent_id}/enable` enables an Agent.
+- `POST /api/admin/agents/{agent_id}/disable` disables an Agent.
+- `POST /api/admin/agents/{agent_id}/permissions` grants an Agent to one `user_id` or one `role`.
+
+Preset Agents can also be initialized independently:
+
+```bash
+python -m app.seed_agents
+```
+
 ## Frontend Setup
 
 ```bash
@@ -112,7 +127,7 @@ copy .env.example .env
 npm run dev -- --host 127.0.0.1 --port 10010
 ```
 
-Open `http://127.0.0.1:10010`, log in with the default admin, register a normal user, approve that user from the admin user page, then confirm the approved user can log in.
+Open `http://127.0.0.1:10010`, log in with the default admin, register a normal user, approve that user from the admin user page, grant Agent permissions from the Agent management page, then confirm the approved user only sees authorized Agents.
 
 ## Environment
 

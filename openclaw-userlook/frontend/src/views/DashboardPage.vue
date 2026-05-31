@@ -46,10 +46,16 @@ onMounted(loadHealth)
           <p>当前版本：{{ appStore.phase }}</p>
         </div>
         <div class="header-actions">
+          <el-button type="primary" @click="router.push({ name: 'agents' })">
+            Agent 工作台
+          </el-button>
+          <el-button v-if="authStore.isAdmin" @click="router.push({ name: 'admin-agents' })">
+            Agent 管理
+          </el-button>
           <el-button v-if="authStore.isAdmin" @click="router.push({ name: 'admin-users' })">
             用户审核
           </el-button>
-          <el-button type="primary" :loading="loading" @click="loadHealth">
+          <el-button :loading="loading" @click="loadHealth">
             刷新状态
           </el-button>
           <el-button @click="logout">退出</el-button>
