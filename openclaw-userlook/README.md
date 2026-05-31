@@ -2,7 +2,7 @@
 
 `openclaw-userlook` is an OpenClaw multi-Agent enterprise workspace.
 
-Phase 09 builds on the Phase 08 enterprise workspace and adds the foundation for embedding the frontend as a WeCom self-built application H5 page. The browser still connects only to FastAPI; FastAPI calls OpenClaw Gateway at `OPENCLAW_GATEWAY_WS_URL` and forwards `assistant_delta`, `assistant_done`, `run_status`, and `error` events. WeCom OAuth now has backend configuration, service-layer isolation, mock login, identity binding, JWT issuance, and audit logging. Redis, Celery, Feishu OAuth, WeCom JS-SDK, directory sync, message push, and browser-to-Gateway direct access are intentionally not implemented.
+Phase 10 builds on the Phase 09 WeCom H5 foundation and adds production deployment templates under `deploy/` for Ubuntu, Nginx HTTPS, systemd, backend installation, frontend build, backend startup, and service checks. The browser still connects only to FastAPI; FastAPI calls OpenClaw Gateway at `OPENCLAW_GATEWAY_WS_URL` and forwards `assistant_delta`, `assistant_done`, `run_status`, and `error` events. Redis, Celery, Feishu OAuth, WeCom JS-SDK, directory sync, message push, Docker, Kubernetes, automatic certificate issuance, and browser-to-Gateway direct access are intentionally not implemented.
 
 ## Stack
 
@@ -167,6 +167,13 @@ Phase 09 WeCom H5 foundation:
 - `/wecom/callback` exchanges `code` and `state` through FastAPI and stores the returned system JWT. The frontend never reads or stores `WECOM_SECRET`.
 - Normal browsers can keep using username/password login. The login page also exposes a WeCom login entry for development mock testing.
 - Dashboard shows the current login source as `password` or `wecom`.
+
+Phase 10 production deployment templates:
+
+- `deploy/nginx/openclaw-userlook.conf.example` provides an HTTPS Nginx template, HTTP-to-HTTPS redirect, frontend `dist` static hosting, `/api/` backend proxy, and `/api/ws/` WebSocket proxy.
+- `deploy/systemd/openclaw-userlook-backend.service.example` runs uvicorn from `backend/.venv` on `127.0.0.1:10009` and writes logs under `backend/logs/`.
+- `deploy/scripts/` includes backend install, frontend build, manual backend start, and service check scripts.
+- `deploy/README.md` documents manual Ubuntu deployment steps without overwriting system files or exposing OpenClaw Gateway port `18789`.
 
 ## Frontend Setup
 
