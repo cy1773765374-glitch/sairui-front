@@ -1,6 +1,7 @@
 import json
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi.encoders import jsonable_encoder
 from jose import JWTError
 from pydantic import ValidationError
 
@@ -14,7 +15,14 @@ from app.schemas.message import WebSocketUserMessage
 from app.services.agent_service import user_can_access_agent
 from app.services.auth_service import get_user_by_id
 from app.services.conversation_service import require_conversation_for_user, save_message
+from app.services.file_service import register_output_files, validate_user_upload_file_ids
 from app.services.openclaw_adapter import OpenClawAdapter
+from app.services.run_service import (
+    create_task_run,
+    mark_task_run_failed,
+    mark_task_run_running,
+    mark_task_run_success,
+)
 from app.services.ws_connection_manager import connection_manager
 
 router = APIRouter(tags=["ws-chat"])
@@ -96,6 +104,7 @@ async def chat_websocket(
 
         await connection_manager.connect(conversation.id, websocket)
         adapter = OpenClawAdapter()
+        active_task_run = None
         try:
             while True:
                 raw_message = await websocket.receive_json()
@@ -107,6 +116,28 @@ async def chat_websocket(
                         {"type": "error", "message": "invalid message format"},
                     )
                     continue
+
+                try:
+                    validate_user_upload_file_ids(db, current_user, inbound_message.file_ids)
+                except HTTPException:
+                    await connection_manager.send_json(
+                        websocket,
+                        {"type": "error", "message": "invalid file_ids"},
+                    )
+                    continue
+
+                task_run = create_task_run(
+                    db,
+                    current_user=current_user,
+                    agent=agent,
+                    conversation_id=conversation.id,
+                    input_text=inbound_message.content,
+                )
+                active_task_run = task_run
+                await connection_manager.send_json(
+                    websocket,
+                    {"type": "run_status", "run_id": task_run.id, "status": "pending"},
+                )
 
                 _record_agent_call_audit(
                     db,
@@ -127,9 +158,10 @@ async def chat_websocket(
                 )
 
                 assistant_content = ""
+                task_run = mark_task_run_running(db, task_run)
                 await connection_manager.send_json(
                     websocket,
-                    {"type": "run_status", "status": "running"},
+                    {"type": "run_status", "run_id": task_run.id, "status": "running"},
                 )
                 async for event in adapter.stream_chat(
                     user=current_user,
@@ -137,6 +169,7 @@ async def chat_websocket(
                     conversation=conversation,
                     content=inbound_message.content,
                     file_ids=inbound_message.file_ids,
+                    output_dir=task_run.output_dir,
                 ):
                     if event.type == "delta":
                         part = event.content or ""
@@ -152,6 +185,7 @@ async def chat_websocket(
                             websocket,
                             {
                                 "type": "run_status",
+                                "run_id": task_run.id,
                                 "status": event.status or "running",
                                 "message": event.content,
                             },
@@ -159,9 +193,18 @@ async def chat_websocket(
                         continue
 
                     if event.type == "error":
+                        task_run = mark_task_run_failed(
+                            db,
+                            task_run,
+                            event.content or "OpenClaw call failed",
+                        )
                         await connection_manager.send_json(
                             websocket,
                             {"type": "error", "message": event.content or "OpenClaw 调用失败"},
+                        )
+                        await connection_manager.send_json(
+                            websocket,
+                            {"type": "run_status", "run_id": task_run.id, "status": "failed"},
                         )
                         if assistant_content:
                             save_message(
@@ -171,6 +214,7 @@ async def chat_websocket(
                                 assistant_content,
                                 raw_payload={"error": True},
                             )
+                        active_task_run = None
                         break
 
                     assistant_message = save_message(
@@ -180,19 +224,40 @@ async def chat_websocket(
                         assistant_content,
                         raw_payload={"mock": adapter.settings.mock_openclaw},
                     )
+                    task_run = mark_task_run_success(
+                        db,
+                        task_run,
+                        output_text=assistant_content,
+                        output_dir=task_run.output_dir,
+                    )
+                    output_files = register_output_files(db, current_user.id, task_run.output_dir)
+                    output_files_payload = jsonable_encoder(output_files)
                     await connection_manager.send_json(
                         websocket,
-                        {"type": "assistant_done", "message_id": assistant_message.id},
+                        {
+                            "type": "assistant_done",
+                            "message_id": assistant_message.id,
+                            "run_id": task_run.id,
+                            "output_files": output_files_payload,
+                        },
                     )
                     await connection_manager.send_json(
                         websocket,
-                        {"type": "run_status", "status": "done"},
+                        {
+                            "type": "run_status",
+                            "run_id": task_run.id,
+                            "status": "success",
+                            "output_files": output_files_payload,
+                        },
                     )
+                    active_task_run = None
                     break
         except WebSocketDisconnect:
             connection_manager.disconnect(conversation.id, websocket)
         except Exception as exc:
             connection_manager.disconnect(conversation.id, websocket)
+            if active_task_run is not None:
+                mark_task_run_failed(db, active_task_run, str(exc) or "WebSocket internal error")
             try:
                 await connection_manager.send_json(
                     websocket,

@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = Field(default=1440, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
     default_admin_username: str = Field(default="admin", alias="DEFAULT_ADMIN_USERNAME")
     default_admin_password: str = Field(default="Admin@123456", alias="DEFAULT_ADMIN_PASSWORD")
+    user_upload_root: str = Field(
+        default="/data/openclaw-userlook/uploads",
+        alias="USER_UPLOAD_ROOT",
+    )
+    user_output_root: str = Field(
+        default="/data/openclaw-userlook/outputs",
+        alias="USER_OUTPUT_ROOT",
+    )
+    max_upload_mb: int = Field(default=50, alias="MAX_UPLOAD_MB")
     cors_origins: list[str] = [
         "http://127.0.0.1:10010",
         "http://localhost:10010",

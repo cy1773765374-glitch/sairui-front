@@ -2,7 +2,7 @@
 
 `openclaw-userlook` is an OpenClaw multi-Agent enterprise workspace.
 
-Phase 06 connects the Phase 05 FastAPI WebSocket chat path to OpenClaw Gateway through a backend-only adapter. The browser still connects only to FastAPI; FastAPI calls OpenClaw Gateway at `OPENCLAW_GATEWAY_WS_URL` and forwards `assistant_delta`, `assistant_done`, `run_status`, and `error` events. File upload, task execution, and WeCom login are intentionally not implemented yet.
+Phase 07 builds on the Phase 06 FastAPI WebSocket chat path and adds TaskRun records, long-running task status, user-isolated file uploads, output file registration, and authenticated downloads. The browser still connects only to FastAPI; FastAPI calls OpenClaw Gateway at `OPENCLAW_GATEWAY_WS_URL` and forwards `assistant_delta`, `assistant_done`, `run_status`, and `error` events. WeCom login and complex file preview are intentionally not implemented yet.
 
 ## Stack
 
@@ -27,6 +27,7 @@ Backend:
 - MySQL 8.0
 - python-jose
 - passlib
+- python-multipart
 
 ## Ports
 
@@ -63,6 +64,9 @@ Default admin values come from:
 
 - `DEFAULT_ADMIN_USERNAME`
 - `DEFAULT_ADMIN_PASSWORD`
+- `USER_UPLOAD_ROOT`
+- `USER_OUTPUT_ROOT`
+- `MAX_UPLOAD_MB`
 
 Health check:
 
@@ -134,6 +138,15 @@ Preset Agents can also be initialized independently:
 python -m app.seed_agents
 ```
 
+Phase 07 files and runs:
+
+- `POST /api/files/upload` accepts multipart field `upload`, stores files under `USER_UPLOAD_ROOT/{user_id}/{yyyyMMdd}`, enforces `MAX_UPLOAD_MB`, and records `purpose=upload`.
+- `GET /api/files` lists upload and output files visible to the current user. Admin users can list all files.
+- `GET /api/files/{file_id}/download` checks ownership and verifies the stored path stays inside the configured upload/output root before serving.
+- `GET /api/runs` lists TaskRun history.
+- `GET /api/runs/{run_id}` returns TaskRun detail and registered output files.
+- Chat WebSocket messages can carry uploaded `file_ids`. Each message creates a `task_runs` row, pushes `run_status` with `run_id`, and scans `USER_OUTPUT_ROOT/{user_id}/{yyyyMMdd}/run_{run_id}` for output files after completion.
+
 ## Frontend Setup
 
 ```bash
@@ -143,7 +156,7 @@ copy .env.example .env
 npm run dev -- --host 127.0.0.1 --port 10010
 ```
 
-Open `http://127.0.0.1:10010`, log in with the default admin, register a normal user, approve that user from the admin user page, grant Agent permissions from the Agent management page, then confirm the approved user only sees authorized Agents. Click an Agent card's chat action to create or reuse a conversation and verify mock streaming replies.
+Open `http://127.0.0.1:10010`, log in with the default admin, register a normal user, approve that user from the admin user page, grant Agent permissions from the Agent management page, then confirm the approved user only sees authorized Agents. Click an Agent card's chat action to create or reuse a conversation, upload a supported file before sending if needed, and verify mock streaming replies. The dashboard also links to the Task Center and File Center.
 
 ## Environment
 

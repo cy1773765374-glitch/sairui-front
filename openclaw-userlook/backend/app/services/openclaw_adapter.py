@@ -23,6 +23,7 @@ class OpenClawAdapterEvent:
     type: AdapterEventType
     content: str | None = None
     status: str | None = None
+    output_dir: str | None = None
 
 
 class OpenClawAdapter:
@@ -46,6 +47,7 @@ class OpenClawAdapter:
         conversation: Conversation,
         content: str,
         file_ids: list[int],
+        output_dir: str | None = None,
     ) -> AsyncIterator[OpenClawAdapterEvent]:
         if self.settings.mock_openclaw:
             async for event in self._mock_stream(content):
@@ -59,11 +61,13 @@ class OpenClawAdapter:
                 conversation=conversation,
                 content=content,
                 file_ids=file_ids,
+                output_dir=output_dir,
             ):
                 yield OpenClawAdapterEvent(
                     type=event.type,
                     content=event.content,
                     status=event.status,
+                    output_dir=event.output_dir,
                 )
         except OpenClawGatewayConnectionError as exc:
             message = str(exc) or GATEWAY_UNAVAILABLE_MESSAGE

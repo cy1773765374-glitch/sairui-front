@@ -12,13 +12,21 @@ import {
   type Conversation,
   type LocalMessage,
 } from '../api/conversations'
+import type { UserFile } from '../api/files'
+import type { TaskRunStatus } from '../api/runs'
 import ChatWindow from '../components/ChatWindow.vue'
 import { useAuthStore } from '../stores/auth'
 
 type ServerWsMessage =
   | { type: 'assistant_delta'; content: string }
-  | { type: 'assistant_done'; message_id: number }
-  | { type: 'run_status'; status: string; message?: string }
+  | { type: 'assistant_done'; message_id: number; run_id?: number; output_files?: UserFile[] }
+  | {
+      type: 'run_status'
+      run_id?: number
+      status: TaskRunStatus | 'done' | 'idle'
+      message?: string
+      output_files?: UserFile[]
+    }
   | { type: 'error'; message: string }
 
 const route = useRoute()
@@ -34,6 +42,11 @@ const messages = ref<LocalMessage[]>([])
 const activeAssistantMessageId = ref<string | null>(null)
 const errorMessage = ref('')
 const highRiskConfirmed = ref(false)
+const attachedFiles = ref<UserFile[]>([])
+const outputFiles = ref<UserFile[]>([])
+const currentRunId = ref<number | null>(null)
+const currentRunStatus = ref<TaskRunStatus | ''>('')
+const currentRunStatusMessage = ref('')
 let socket: WebSocket | null = null
 
 const title = computed(() => conversation.value?.title ?? agent.value?.name ?? 'Agent 对话')
@@ -115,11 +128,21 @@ function connectWebSocket(conversationId: number) {
     }
 
     if (payload.type === 'run_status') {
-      sending.value = payload.status !== 'done' && payload.status !== 'idle'
+      currentRunId.value = payload.run_id ?? currentRunId.value
+      currentRunStatus.value = payload.status === 'done' ? 'success' : payload.status === 'idle' ? '' : payload.status
+      currentRunStatusMessage.value = payload.message ?? ''
+      if (payload.output_files) {
+        outputFiles.value = payload.output_files
+      }
+      sending.value = !['success', 'failed', 'cancelled', 'done', 'idle'].includes(payload.status)
       return
     }
 
     if (payload.type === 'assistant_done') {
+      currentRunId.value = payload.run_id ?? currentRunId.value
+      if (payload.output_files) {
+        outputFiles.value = payload.output_files
+      }
       const target = messages.value.find((message) => message.id === activeAssistantMessageId.value)
       if (target) {
         target.id = payload.message_id
@@ -144,7 +167,7 @@ function connectWebSocket(conversationId: number) {
   }
 }
 
-async function sendMessage(content: string) {
+async function sendMessage(content: string, fileIds: number[]) {
   if (!socket || socket.readyState !== WebSocket.OPEN || !conversation.value) {
     ElMessage.error('WebSocket 未连接')
     return
@@ -169,21 +192,35 @@ async function sendMessage(content: string) {
 
   sending.value = true
   errorMessage.value = ''
+  outputFiles.value = []
+  currentRunStatusMessage.value = ''
   messages.value.push({
     id: `user-${Date.now()}`,
     conversation_id: conversation.value.id,
     role: 'user',
     content,
     created_at: new Date().toISOString(),
+    raw_payload: { file_ids: fileIds },
     streaming: false,
   })
   socket.send(
     JSON.stringify({
       type: 'user_message',
       content,
-      file_ids: [],
+      file_ids: fileIds,
     }),
   )
+  attachedFiles.value = []
+}
+
+function addUploadedFile(file: UserFile) {
+  if (!attachedFiles.value.some((item) => item.id === file.id)) {
+    attachedFiles.value.push(file)
+  }
+}
+
+function removeAttachedFile(fileId: number) {
+  attachedFiles.value = attachedFiles.value.filter((file) => file.id !== fileId)
 }
 
 async function confirmHighRiskAgent(currentAgent: Agent) {
@@ -256,7 +293,14 @@ onBeforeUnmount(() => {
       :sending="sending"
       :loading="loading"
       :error-message="errorMessage"
+      :attached-files="attachedFiles"
+      :run-id="currentRunId"
+      :run-status="currentRunStatus"
+      :run-status-message="currentRunStatusMessage"
+      :output-files="outputFiles"
       @send="sendMessage"
+      @file-uploaded="addUploadedFile"
+      @remove-file="removeAttachedFile"
     />
   </main>
 </template>

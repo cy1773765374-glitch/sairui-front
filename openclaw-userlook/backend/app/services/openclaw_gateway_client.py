@@ -23,6 +23,7 @@ class OpenClawGatewayEvent:
     type: GatewayEventType
     content: str | None = None
     status: str | None = None
+    output_dir: str | None = None
     raw: dict[str, Any] | None = None
 
 
@@ -49,6 +50,7 @@ class OpenClawGatewayClient:
         conversation: Conversation,
         content: str,
         file_ids: list[int],
+        output_dir: str | None = None,
     ) -> AsyncIterator[OpenClawGatewayEvent]:
         request_payload = self._build_chat_request(
             user=user,
@@ -56,6 +58,7 @@ class OpenClawGatewayClient:
             conversation=conversation,
             content=content,
             file_ids=file_ids,
+            output_dir=output_dir,
         )
         headers = self._build_headers()
 
@@ -101,8 +104,9 @@ class OpenClawGatewayClient:
         conversation: Conversation,
         content: str,
         file_ids: list[int],
+        output_dir: str | None,
     ) -> dict[str, Any]:
-        return {
+        payload = {
             "type": "chat",
             "action": "chat",
             "stream": True,
@@ -120,6 +124,9 @@ class OpenClawGatewayClient:
                 "file_ids": file_ids,
             },
         }
+        if output_dir:
+            payload["output_dir"] = output_dir
+        return payload
 
     def _parse_gateway_message(self, raw_message: str | bytes) -> OpenClawGatewayEvent:
         if isinstance(raw_message, bytes):
@@ -150,7 +157,11 @@ class OpenClawGatewayClient:
             )
 
         if event_type in {"done", "assistant_done", "end", "completed", "complete", "finished"}:
-            return OpenClawGatewayEvent(type="done", raw=payload)
+            return OpenClawGatewayEvent(
+                type="done",
+                output_dir=self._extract_output_dir(payload),
+                raw=payload,
+            )
 
         if event_type in {"run_status", "status", "progress", "started", "running"}:
             return OpenClawGatewayEvent(
@@ -176,6 +187,13 @@ class OpenClawGatewayClient:
                 if nested:
                     return nested
         return ""
+
+    def _extract_output_dir(self, payload: dict[str, Any]) -> str | None:
+        for key in ("output_dir", "outputPath", "output_path"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return None
 
     def _extract_error_message(self, payload: dict[str, Any]) -> str:
         for key in ("message", "error", "detail", "content"):

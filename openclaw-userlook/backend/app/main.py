@@ -5,7 +5,9 @@ from app.api.routes.agents import router as agents_router
 from app.api.routes.admin_users import router as admin_users_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.conversations import router as conversations_router
+from app.api.routes.files import router as files_router
 from app.api.routes.health import router as health_router
+from app.api.routes.runs import router as runs_router
 from app.api.routes.ws_chat import router as ws_chat_router
 from app.core.config import get_settings
 
@@ -25,5 +27,7 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(admin_users_router, prefix="/api")
 app.include_router(agents_router, prefix="/api")
 app.include_router(conversations_router, prefix="/api")
+app.include_router(files_router, prefix="/api")
+app.include_router(runs_router, prefix="/api")
 app.include_router(ws_chat_router, prefix="/api")
 app.include_router(health_router, prefix="/api")

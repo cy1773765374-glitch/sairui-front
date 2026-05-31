@@ -1,6 +1,6 @@
 # openclaw-userlook backend
 
-Phase 06 keeps the browser-facing FastAPI WebSocket chat API from Phase 05 and adds a backend-only OpenClaw Gateway adapter. `MOCK_OPENCLAW=true` keeps the Phase 05 mock stream available; `MOCK_OPENCLAW=false` sends chat requests from FastAPI to OpenClaw Gateway over WebSocket.
+Phase 07 keeps the browser-facing FastAPI WebSocket chat API from Phase 06 and adds TaskRun records, long-running status updates, user-isolated uploads, output file registration, and authenticated downloads. `MOCK_OPENCLAW=true` keeps the mock stream available; `MOCK_OPENCLAW=false` sends chat requests from FastAPI to OpenClaw Gateway over WebSocket.
 
 ## Requirements
 
@@ -144,6 +144,9 @@ curl -X POST http://127.0.0.1:10009/api/admin/agents/main/permissions ^
 - `ACCESS_TOKEN_EXPIRE_MINUTES`
 - `DEFAULT_ADMIN_USERNAME`
 - `DEFAULT_ADMIN_PASSWORD`
+- `USER_UPLOAD_ROOT`
+- `USER_OUTPUT_ROOT`
+- `MAX_UPLOAD_MB`
 
 ## Chat Gateway
 
@@ -153,13 +156,21 @@ The browser only connects to:
 WS /api/ws/conversations/{conversation_id}?token={JWT}
 ```
 
-`ws_chat.py` saves the user message, records `audit_logs.action=agent.invoke`, then calls `OpenClawAdapter`. The adapter either streams the mock reply or delegates to `OpenClawGatewayClient`, which owns the Gateway URL, token header, request payload, and response parsing.
+`ws_chat.py` validates uploaded `file_ids`, creates a `task_runs` row, saves the user message, records `audit_logs.action=agent.invoke`, then calls `OpenClawAdapter`. The adapter either streams the mock reply or delegates to `OpenClawGatewayClient`, which owns the Gateway URL, token header, request payload, and response parsing. Task status events include `run_id`, and completed runs scan `USER_OUTPUT_ROOT/{user_id}/{yyyyMMdd}/run_{run_id}` for supported output files.
 
 Gateway failure is returned to the browser as:
 
 ```text
 OpenClaw Gateway 连接失败，请检查 openclaw-gateway.service 是否运行
 ```
+
+## Files and Runs
+
+- `POST /api/files/upload` accepts multipart field `upload`, enforces `MAX_UPLOAD_MB`, and supports `txt`, `md`, `doc`, `docx`, `xls`, `xlsx`, `ppt`, `pptx`, `pdf`, `png`, `jpg`, and `jpeg`.
+- `GET /api/files` lists upload and output files visible to the current user.
+- `GET /api/files/{file_id}/download` checks ownership and verifies the stored path stays inside the configured upload/output root.
+- `GET /api/runs` lists TaskRun history.
+- `GET /api/runs/{run_id}` returns TaskRun detail and registered output files.
 
 ## Verification
 
