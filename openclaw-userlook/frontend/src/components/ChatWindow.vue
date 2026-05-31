@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { Close, Connection, Promotion } from '@element-plus/icons-vue'
+import { Close, Connection, Promotion, VideoPause } from '@element-plus/icons-vue'
 
 import { formatFileSize, type UserFile } from '../api/files'
 import type { TaskRunStatus } from '../api/runs'
@@ -126,20 +126,25 @@ watch(
         resize="none"
         maxlength="2000"
         show-word-limit
-        placeholder="输入消息"
+        placeholder="输入消息，Enter 发送，Shift + Enter 换行"
         :disabled="!connected || sending"
         @keydown.enter.exact.prevent="send"
       />
-      <el-button
-        class="send-button"
-        type="primary"
-        :icon="Promotion"
-        :disabled="!canSend"
-        :loading="sending"
-        @click="send"
-      >
-        发送
-      </el-button>
+      <div class="composer-actions">
+        <el-tooltip content="当前阶段仅显示停止按钮，不执行取消">
+          <el-button :icon="VideoPause" :disabled="true">停止</el-button>
+        </el-tooltip>
+        <el-button
+          class="send-button"
+          type="primary"
+          :icon="Promotion"
+          :disabled="!canSend"
+          :loading="sending"
+          @click="send"
+        >
+          发送
+        </el-button>
+      </div>
     </footer>
   </section>
 </template>
@@ -148,9 +153,9 @@ watch(
 .chat-window {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
-  height: calc(100vh - 96px);
-  min-height: 560px;
-  border: 1px solid #d9e2ec;
+  height: calc(100vh - 120px);
+  min-height: 620px;
+  border: 1px solid #dfe5ee;
   border-radius: 8px;
   background: #f8fafc;
   overflow: hidden;
@@ -162,19 +167,23 @@ watch(
   justify-content: space-between;
   gap: 16px;
   padding: 18px 20px;
-  border-bottom: 1px solid #d9e2ec;
+  border-bottom: 1px solid #dfe5ee;
   background: #ffffff;
 }
 
-h1 {
+h1,
+p {
   margin: 0;
+}
+
+h1 {
   font-size: 20px;
   line-height: 1.35;
 }
 
 p {
-  margin: 6px 0 0;
-  color: #667085;
+  margin-top: 6px;
+  color: #6f7785;
 }
 
 .message-list {
@@ -192,29 +201,28 @@ p {
   gap: 12px;
   align-items: end;
   padding: 16px 20px;
-  border-top: 1px solid #d9e2ec;
+  border-top: 1px solid #dfe5ee;
   background: #ffffff;
 }
 
-.chat-error {
-  flex: 0 0 auto;
+.chat-error,
+.response-status,
+.attachment-row {
+  grid-column: 1 / -1;
 }
 
 .response-status {
-  grid-column: 1 / -1;
   min-height: 18px;
-  color: #667085;
+  color: #6f7785;
   font-size: 13px;
-  line-height: 18px;
 }
 
-.attachment-row {
-  grid-column: 1 / -1;
+.attachment-row,
+.composer-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  min-width: 0;
 }
 
 .attachment-tag {
@@ -235,11 +243,10 @@ p {
   min-width: 96px;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 760px) {
   .chat-window {
-    height: calc(100vh - 56px);
-    min-height: 480px;
-    border-radius: 0;
+    height: auto;
+    min-height: 640px;
   }
 
   .chat-header,
@@ -253,8 +260,8 @@ p {
     grid-template-columns: 1fr;
   }
 
-  .send-button {
-    width: 100%;
+  .composer-actions {
+    justify-content: flex-end;
   }
 }
 </style>

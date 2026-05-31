@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import { useAuthStore } from '../stores/auth'
+import AdminPage from '../views/AdminPage.vue'
 import AdminAgentsPage from '../views/AdminAgentsPage.vue'
 import AdminUsersPage from '../views/AdminUsersPage.vue'
 import AgentsPage from '../views/AgentsPage.vue'
@@ -55,6 +56,12 @@ const router = createRouter({
       name: 'register',
       component: RegisterPage,
       meta: { guestOnly: true },
+    },
+    {
+      path: '/admin',
+      name: 'admin',
+      component: AdminPage,
+      meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: '/admin/users',

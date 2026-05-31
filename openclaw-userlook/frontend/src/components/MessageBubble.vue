@@ -32,37 +32,36 @@ defineProps<{
 }
 
 .message-bubble {
-  max-width: min(680px, 84%);
+  max-width: min(760px, 84%);
   padding: 12px 14px;
-  border: 1px solid #d9e2ec;
-  border-radius: 8px;
+  border: 1px solid #dfe5ee;
+  border-radius: 18px;
   background: #ffffff;
-  color: #1f2937;
-  box-shadow: 0 1px 2px rgb(16 24 40 / 6%);
+  color: #202124;
+  box-shadow: 0 1px 2px rgb(60 64 67 / 8%);
 }
 
 .message-row--user .message-bubble {
-  border-color: #2563eb;
-  background: #2563eb;
-  color: #ffffff;
+  border-color: #dfe9fb;
+  background: #dfe9fb;
 }
 
 .message-role {
   margin-bottom: 6px;
+  color: #6f7785;
   font-size: 12px;
   font-weight: 700;
-  opacity: 0.72;
 }
 
 .message-content {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  line-height: 1.6;
+  line-height: 1.65;
 }
 
 .message-status {
   margin-top: 8px;
+  color: #6f7785;
   font-size: 12px;
-  opacity: 0.68;
 }
 </style>

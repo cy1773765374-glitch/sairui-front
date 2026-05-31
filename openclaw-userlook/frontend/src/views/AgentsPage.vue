@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { Refresh, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
 import { fetchAgents, type Agent } from '../api/agents'
@@ -11,6 +12,27 @@ const router = useRouter()
 const authStore = useAuthStore()
 const loading = ref(false)
 const agents = ref<Agent[]>([])
+const keyword = ref('')
+const category = ref('all')
+
+const categories = computed(() => {
+  const values = new Set(agents.value.map((agent) => agent.category || '未分类'))
+  return ['all', ...Array.from(values)]
+})
+
+const filteredAgents = computed(() => {
+  const text = keyword.value.trim().toLowerCase()
+  return agents.value.filter((agent) => {
+    const agentCategory = agent.category || '未分类'
+    const matchesCategory = category.value === 'all' || agentCategory === category.value
+    const matchesKeyword =
+      !text ||
+      [agent.name, agent.code, agent.description, agent.openclaw_agent_id, agentCategory]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(text))
+    return matchesCategory && matchesKeyword
+  })
+})
 
 async function loadAgents() {
   loading.value = true
@@ -23,11 +45,6 @@ async function loadAgents() {
   }
 }
 
-function logout() {
-  authStore.logout()
-  router.push({ name: 'login' })
-}
-
 function openChat(agent: Agent) {
   router.push({ name: 'agent-chat', params: { agentCode: agent.code } })
 }
@@ -36,97 +53,120 @@ onMounted(loadAgents)
 </script>
 
 <template>
-  <main class="agents-page">
-    <section class="agents-shell">
-      <div class="header-row">
-        <div>
-          <h1>Agent 工作台</h1>
-          <p>选择已授权的 Agent。当前阶段仅展示和管理 Agent，不调用 OpenClaw。</p>
-        </div>
-        <div class="header-actions">
-          <el-button @click="router.push({ name: 'dashboard' })">返回首页</el-button>
-          <el-button v-if="authStore.isAdmin" @click="router.push({ name: 'admin-agents' })">
-            Agent 管理
-          </el-button>
-          <el-button type="primary" :loading="loading" @click="loadAgents">刷新</el-button>
-          <el-button @click="logout">退出</el-button>
-        </div>
+  <section class="agents-page page-stack">
+    <header class="page-heading">
+      <div>
+        <p class="eyebrow">Agents</p>
+        <h1>Agent 广场</h1>
+        <p>选择已授权 Agent，按业务类别、关键词和能力快速定位。</p>
       </div>
+      <div class="heading-actions">
+        <el-button v-if="authStore.isAdmin" @click="router.push({ name: 'admin-agents' })">
+          Agent 管理
+        </el-button>
+        <el-button type="primary" :icon="Refresh" :loading="loading" @click="loadAgents">刷新</el-button>
+      </div>
+    </header>
 
-      <el-skeleton v-if="loading" :rows="6" animated />
-      <el-empty
-        v-else-if="agents.length === 0"
-        description="暂无可访问的 Agent，请联系管理员授权。"
-      />
-      <div v-else class="agent-grid">
-        <AgentCard
-          v-for="agent in agents"
-          :key="agent.code"
-          :agent="agent"
-          @open-chat="openChat"
+    <el-card class="filter-card" shadow="never">
+      <div class="filter-row">
+        <el-input
+          v-model="keyword"
+          :prefix-icon="Search"
+          clearable
+          placeholder="搜索 Agent 名称、编码、说明"
         />
+        <el-segmented v-model="category" :options="categories" />
       </div>
-    </section>
-  </main>
+    </el-card>
+
+    <el-skeleton v-if="loading" :rows="6" animated />
+    <el-empty
+      v-else-if="filteredAgents.length === 0"
+      description="暂无符合条件的 Agent，请调整筛选条件或联系管理员授权。"
+    />
+    <div v-else class="agent-grid">
+      <AgentCard
+        v-for="agent in filteredAgents"
+        :key="agent.code"
+        :agent="agent"
+        @open-chat="openChat"
+      />
+    </div>
+  </section>
 </template>
 
 <style scoped>
-.agents-page {
-  min-height: 100vh;
-  background: #f5f7fb;
-  color: #1f2937;
+.page-stack {
+  display: grid;
+  gap: 20px;
 }
 
-.agents-shell {
-  width: min(1180px, calc(100% - 32px));
-  margin: 0 auto;
-  padding: 48px 0;
-}
-
-.header-row {
+.page-heading {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 24px;
+  gap: 20px;
 }
 
-.header-actions {
+.heading-actions,
+.filter-row {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 10px;
+  align-items: center;
+  gap: 12px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: #1a73e8;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+h1,
+p {
+  margin: 0;
 }
 
 h1 {
-  margin: 0;
-  font-size: 30px;
+  font-size: 28px;
   line-height: 1.25;
 }
 
-p {
-  margin: 10px 0 0;
-  color: #667085;
+.page-heading p:last-child {
+  margin-top: 8px;
+  color: #6f7785;
+}
+
+.filter-card {
+  border-radius: 8px;
+}
+
+.filter-row .el-input {
+  max-width: 360px;
 }
 
 .agent-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 16px;
 }
 
-@media (max-width: 720px) {
-  .agents-shell {
-    width: min(100% - 24px, 1180px);
-    padding: 28px 0;
-  }
-
-  .header-row {
+@media (max-width: 760px) {
+  .page-heading,
+  .filter-row {
+    align-items: flex-start;
     flex-direction: column;
   }
 
-  .header-actions {
-    justify-content: flex-start;
+  .heading-actions,
+  .filter-row .el-input {
+    width: 100%;
+  }
+
+  .filter-row :deep(.el-segmented) {
+    max-width: 100%;
+    overflow-x: auto;
   }
 }
 </style>
