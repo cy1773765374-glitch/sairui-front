@@ -2,7 +2,7 @@
 
 `openclaw-userlook` is an OpenClaw multi-Agent enterprise workspace.
 
-Phase 07 builds on the Phase 06 FastAPI WebSocket chat path and adds TaskRun records, long-running task status, user-isolated file uploads, output file registration, and authenticated downloads. The browser still connects only to FastAPI; FastAPI calls OpenClaw Gateway at `OPENCLAW_GATEWAY_WS_URL` and forwards `assistant_delta`, `assistant_done`, `run_status`, and `error` events. WeCom login and complex file preview are intentionally not implemented yet.
+Phase 08 builds on the Phase 07 FastAPI WebSocket chat path and upgrades the frontend into an enterprise OpenClaw multi-Agent workspace. It adds a unified Element Plus workbench shell, Dashboard overview, searchable Agent marketplace, three-column chat workspace, task center, file center, and admin entry page. The browser still connects only to FastAPI; FastAPI calls OpenClaw Gateway at `OPENCLAW_GATEWAY_WS_URL` and forwards `assistant_delta`, `assistant_done`, `run_status`, and `error` events. WeCom login, Redis, Celery, and browser-to-Gateway direct access are intentionally not implemented.
 
 ## Stack
 
@@ -147,6 +147,16 @@ Phase 07 files and runs:
 - `GET /api/runs/{run_id}` returns TaskRun detail and registered output files.
 - Chat WebSocket messages can carry uploaded `file_ids`. Each message creates a `task_runs` row, pushes `run_status` with `run_id`, and scans `USER_OUTPUT_ROOT/{user_id}/{yyyyMMdd}/run_{run_id}` for output files after completion.
 
+Phase 08 frontend workspace:
+
+- Dashboard shows backend health, current user, available Agent count, recent TaskRun records, and recent conversations.
+- Agent marketplace supports keyword search, category filtering, risk tags, and file/image capability tags.
+- Chat workspace uses a three-column layout: available Agents and conversation history on the left, streaming chat and file upload in the center, and Agent/task/output details on the right.
+- High-risk Agents require a confirmation dialog before first entering chat in the current page session.
+- WebSocket disconnects show Element Plus notifications and retry the conversation channel up to three times.
+- Task center and file center use Element Plus tables for status, timestamps, output files, file metadata, and authenticated downloads.
+- Admin users see the admin entry page, user management, and Agent management menus; normal users do not.
+
 ## Frontend Setup
 
 ```bash
@@ -156,7 +166,7 @@ copy .env.example .env
 npm run dev -- --host 127.0.0.1 --port 10010
 ```
 
-Open `http://127.0.0.1:10010`, log in with the default admin, register a normal user, approve that user from the admin user page, grant Agent permissions from the Agent management page, then confirm the approved user only sees authorized Agents. Click an Agent card's chat action to create or reuse a conversation, upload a supported file before sending if needed, and verify mock streaming replies. The dashboard also links to the Task Center and File Center.
+Open `http://127.0.0.1:10010`, log in with the default admin, register a normal user, approve that user from the admin user page, grant Agent permissions from the Agent management page, then confirm the approved user only sees authorized Agents and no admin menu. Use the Agent marketplace filters to choose an Agent, enter the chat workspace, upload a supported file before sending if needed, and verify mock streaming replies. The Dashboard links into recent conversations, Task Center, and File Center.
 
 ## Environment
 

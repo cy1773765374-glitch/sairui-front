@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
 import { fetchAdminUsers } from '../api/adminUsers'
@@ -14,7 +14,6 @@ import {
 } from '../api/agents'
 import type { User, UserRole } from '../api/auth'
 
-const router = useRouter()
 const loading = ref(false)
 const usersLoading = ref(false)
 const agents = ref<Agent[]>([])
@@ -113,27 +112,24 @@ onMounted(loadAgents)
 </script>
 
 <template>
-  <main class="admin-agents-page">
-    <section class="admin-agents-shell">
-      <div class="header-row">
-        <div>
-          <h1>Agent 管理</h1>
-          <p>查看预置 Agent，控制启用状态，并给用户或角色授权。</p>
-        </div>
-        <div class="header-actions">
-          <el-button @click="router.push({ name: 'agents' })">Agent 工作台</el-button>
-          <el-button @click="router.push({ name: 'dashboard' })">返回首页</el-button>
-          <el-button type="primary" :loading="loading" @click="loadAgents">刷新</el-button>
-        </div>
+  <section class="admin-agents-page page-stack">
+    <header class="page-heading">
+      <div>
+        <p class="eyebrow">Admin</p>
+        <h1>Agent 管理</h1>
+        <p>查看预置 Agent，控制启用状态，并给用户或角色授权。</p>
       </div>
+      <el-button type="primary" :icon="Refresh" :loading="loading" @click="loadAgents">刷新</el-button>
+    </header>
 
-      <el-table v-loading="loading" :data="agents" border class="agents-table">
+    <el-card class="table-card" shadow="never">
+      <el-table v-loading="loading" :data="agents">
         <el-table-column prop="name" label="名称" min-width="160" />
-        <el-table-column prop="description" label="描述" min-width="240" />
+        <el-table-column prop="description" label="说明" min-width="240" />
         <el-table-column prop="category" label="分类" width="120" />
         <el-table-column label="风险" width="110">
           <template #default="{ row }: { row: Agent }">
-            <el-tag :type="riskTagType(row.risk_level)" effect="dark">{{ row.risk_level }}</el-tag>
+            <el-tag :type="riskTagType(row.risk_level)" effect="plain">{{ row.risk_level }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="能力" min-width="150">
@@ -150,12 +146,12 @@ onMounted(loadAgents)
         </el-table-column>
         <el-table-column label="状态" width="110">
           <template #default="{ row }: { row: Agent }">
-            <el-tag :type="row.enabled ? 'success' : 'info'">
+            <el-tag :type="row.enabled ? 'success' : 'info'" effect="plain">
               {{ row.enabled ? '已启用' : '已禁用' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }: { row: Agent }">
             <el-button
               size="small"
@@ -170,90 +166,86 @@ onMounted(loadAgents)
           </template>
         </el-table-column>
       </el-table>
+    </el-card>
 
-      <el-dialog v-model="permissionDialogVisible" title="Agent 授权" width="460px">
-        <el-form label-width="92px">
-          <el-form-item label="Agent">
-            <span>{{ selectedAgent?.name }}</span>
-          </el-form-item>
-          <el-form-item label="授权对象">
-            <el-radio-group v-model="permissionMode">
-              <el-radio-button label="role">角色</el-radio-button>
-              <el-radio-button label="user">用户</el-radio-button>
-            </el-radio-group>
-          </el-form-item>
-          <el-form-item v-if="permissionMode === 'role'" label="角色">
-            <el-select v-model="selectedRole" class="form-control">
-              <el-option label="普通用户" value="user" />
-              <el-option label="管理员" value="admin" />
-            </el-select>
-          </el-form-item>
-          <el-form-item v-else label="用户">
-            <el-select
-              v-model="selectedUserId"
-              class="form-control"
-              filterable
-              :loading="usersLoading"
-              placeholder="选择用户"
-            >
-              <el-option
-                v-for="user in activeUsers"
-                :key="user.id"
-                :label="`${user.display_name}（${user.username}）`"
-                :value="user.id"
-              />
-            </el-select>
-          </el-form-item>
-        </el-form>
-        <template #footer>
-          <el-button @click="permissionDialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="submitPermission">确认授权</el-button>
-        </template>
-      </el-dialog>
-    </section>
-  </main>
+    <el-dialog v-model="permissionDialogVisible" title="Agent 授权" width="460px">
+      <el-form label-width="92px">
+        <el-form-item label="Agent">
+          <span>{{ selectedAgent?.name }}</span>
+        </el-form-item>
+        <el-form-item label="授权对象">
+          <el-radio-group v-model="permissionMode">
+            <el-radio-button label="role">角色</el-radio-button>
+            <el-radio-button label="user">用户</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="permissionMode === 'role'" label="角色">
+          <el-select v-model="selectedRole" class="form-control">
+            <el-option label="普通用户" value="user" />
+            <el-option label="管理员" value="admin" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-else label="用户">
+          <el-select
+            v-model="selectedUserId"
+            class="form-control"
+            filterable
+            :loading="usersLoading"
+            placeholder="选择用户"
+          >
+            <el-option
+              v-for="user in activeUsers"
+              :key="user.id"
+              :label="`${user.display_name} (${user.username})`"
+              :value="user.id"
+            />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="permissionDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitPermission">确认授权</el-button>
+      </template>
+    </el-dialog>
+  </section>
 </template>
 
 <style scoped>
-.admin-agents-page {
-  min-height: 100vh;
-  background: #f5f7fb;
-  color: #1f2937;
+.page-stack {
+  display: grid;
+  gap: 20px;
 }
 
-.admin-agents-shell {
-  width: min(1220px, calc(100% - 32px));
-  margin: 0 auto;
-  padding: 48px 0;
-}
-
-.header-row {
+.page-heading {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 24px;
+  gap: 20px;
 }
 
-.header-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 10px;
+.eyebrow {
+  margin: 0 0 8px;
+  color: #1a73e8;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+h1,
+p {
+  margin: 0;
 }
 
 h1 {
-  margin: 0;
-  font-size: 30px;
+  font-size: 28px;
   line-height: 1.25;
 }
 
-p {
-  margin: 10px 0 0;
-  color: #667085;
+.page-heading p:last-child {
+  margin-top: 8px;
+  color: #6f7785;
 }
 
-.agents-table {
+.table-card {
   border-radius: 8px;
 }
 
@@ -268,17 +260,9 @@ p {
 }
 
 @media (max-width: 720px) {
-  .admin-agents-shell {
-    width: min(100% - 24px, 1220px);
-    padding: 28px 0;
-  }
-
-  .header-row {
+  .page-heading {
+    align-items: flex-start;
     flex-direction: column;
-  }
-
-  .header-actions {
-    justify-content: flex-start;
   }
 }
 </style>
