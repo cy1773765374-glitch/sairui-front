@@ -13,6 +13,10 @@ class Settings(BaseSettings):
         default="ws://127.0.0.1:18789",
         alias="OPENCLAW_GATEWAY_WS_URL",
     )
+    database_url: str = Field(
+        default="mysql+pymysql://user:password@127.0.0.1:3306/openclaw_userlook?charset=utf8mb4",
+        alias="DATABASE_URL",
+    )
     cors_origins: list[str] = [
         "http://127.0.0.1:10010",
         "http://localhost:10010",
