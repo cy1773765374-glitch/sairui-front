@@ -4,6 +4,7 @@ import { useAuthStore } from '../stores/auth'
 import AdminAgentsPage from '../views/AdminAgentsPage.vue'
 import AdminUsersPage from '../views/AdminUsersPage.vue'
 import AgentsPage from '../views/AgentsPage.vue'
+import ChatPage from '../views/ChatPage.vue'
 import DashboardPage from '../views/DashboardPage.vue'
 import LoginPage from '../views/LoginPage.vue'
 import RegisterPage from '../views/RegisterPage.vue'
@@ -21,6 +22,12 @@ const router = createRouter({
       path: '/agents',
       name: 'agents',
       component: AgentsPage,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/agents/:agentCode/chat',
+      name: 'agent-chat',
+      component: ChatPage,
       meta: { requiresAuth: true },
     },
     {

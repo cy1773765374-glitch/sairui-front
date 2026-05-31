@@ -5,6 +5,10 @@ defineProps<{
   agent: Agent
 }>()
 
+defineEmits<{
+  'open-chat': [agent: Agent]
+}>()
+
 function riskTagType(riskLevel: AgentRiskLevel) {
   if (riskLevel === 'high') {
     return 'danger'
@@ -49,6 +53,10 @@ function riskTagType(riskLevel: AgentRiskLevel) {
       <el-tag :type="agent.support_images ? 'success' : 'info'" plain>
         图片：{{ agent.support_images ? '支持' : '不支持' }}
       </el-tag>
+    </div>
+
+    <div class="agent-card__actions">
+      <el-button type="primary" @click="$emit('open-chat', agent)">进入对话</el-button>
     </div>
   </article>
 </template>
@@ -107,5 +115,11 @@ p {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 18px;
+}
+
+.agent-card__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
 }
 </style>
