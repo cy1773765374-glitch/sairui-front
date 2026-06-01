@@ -1,8 +1,8 @@
-# openclaw-userlook Production Deployment
+# openclaw-userlook 生产部署说明
 
-This directory contains production deployment templates for an Ubuntu server. The files are examples only. Review and copy them into system locations manually; do not run commands that overwrite existing Nginx or systemd files without checking the target first.
+本目录提供面向 Ubuntu 服务器的生产部署脚本和配置模板。所有文件都是示例模板，需要人工审阅后再复制到系统目录；不要在未确认目标文件的情况下覆盖已有 Nginx 或 systemd 配置。
 
-## Layout
+## 目录结构
 
 ```text
 deploy/
@@ -19,24 +19,24 @@ deploy/
 └── README.md
 ```
 
-Assumed production project path in the examples:
+示例配置默认项目部署路径为：
 
 ```bash
 /opt/openclaw-userlook
 ```
 
-If you deploy elsewhere, update all paths in the Nginx and systemd templates.
+如果实际路径不同，需要同步修改 Nginx 和 systemd 模板中的路径。
 
-## 1. Create Python Virtual Environment
+## 1. 创建 Python 虚拟环境
 
 ```bash
 cd /opt/openclaw-userlook
 bash deploy/scripts/install_backend.sh
 ```
 
-The script creates `backend/.venv`, installs dependencies, creates `backend/logs`, and copies `backend/.env.example` to `backend/.env` only when `.env` does not exist.
+该脚本会创建 `backend/.venv`、安装后端依赖、创建 `backend/logs`，并且只在 `backend/.env` 不存在时从 `backend/.env.example` 复制一份。
 
-Manual equivalent:
+也可以手动执行：
 
 ```bash
 cd /opt/openclaw-userlook/backend
@@ -45,18 +45,18 @@ python3 -m venv .venv
 mkdir -p logs
 ```
 
-## 2. Install Requirements
+## 2. 安装 requirements
 
-If you did not use `install_backend.sh`, install requirements manually:
+如果没有使用 `install_backend.sh`，可以手动安装依赖：
 
 ```bash
 cd /opt/openclaw-userlook/backend
 .venv/bin/pip install -r requirements.txt
 ```
 
-## 3. Configure backend/.env
+## 3. 配置 backend/.env
 
-Create and edit the backend environment file:
+创建并编辑后端环境变量文件：
 
 ```bash
 cd /opt/openclaw-userlook/backend
@@ -64,7 +64,7 @@ cd /opt/openclaw-userlook/backend
 nano .env
 ```
 
-Production values to review:
+生产环境重点检查：
 
 - `APP_ENV=production`
 - `DATABASE_URL=mysql+pymysql://user:password@127.0.0.1:3306/openclaw_userlook?charset=utf8mb4`
@@ -77,83 +77,84 @@ Production values to review:
 - `USER_UPLOAD_ROOT=/data/openclaw-userlook/uploads`
 - `USER_OUTPUT_ROOT=/data/openclaw-userlook/outputs`
 - `MAX_UPLOAD_MB=100`
-- WeCom settings when H5 login is enabled.
+- 如启用企业微信 H5 登录，还需要配置 WeCom 相关变量。
 
-Do not put secrets in frontend `.env` or committed files.
+密钥、Token、企业微信 Secret、OpenClaw Token 只应放在后端 `.env`，不要写入前端 `.env` 或提交到仓库。
 
-## 4. Initialize Database
+## 4. 初始化数据库
 
-Create the MySQL database first:
+先创建 MySQL 数据库：
 
 ```sql
 CREATE DATABASE openclaw_userlook CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-Then initialize tables:
+再初始化表结构和基础数据：
 
 ```bash
 cd /opt/openclaw-userlook/backend
 .venv/bin/python -m app.init_db
 ```
 
-## 5. Create Default Admin
+## 5. 创建默认 admin
 
-`app.init_db` also ensures the default admin from these `.env` values:
+`app.init_db` 会根据 `.env` 中的以下配置确保默认管理员存在：
 
 - `DEFAULT_ADMIN_USERNAME`
 - `DEFAULT_ADMIN_PASSWORD`
 
-Change the default password before production exposure. If you need to re-seed Agents only:
+生产环境对外开放前必须修改默认密码。如只需要重新初始化预置 Agent，可以执行：
 
 ```bash
 cd /opt/openclaw-userlook/backend
 .venv/bin/python -m app.seed_agents
 ```
 
-## 6. Build Frontend
+## 6. 构建前端
 
-For production, build static assets and let Nginx serve `frontend/dist`:
+生产环境使用 `npm run build` 生成静态文件，并由 Nginx 托管 `frontend/dist`：
 
 ```bash
 cd /opt/openclaw-userlook
 bash deploy/scripts/build_frontend.sh
 ```
 
-Set `frontend/.env` before building. Use the public HTTPS origin that Nginx serves:
+构建前先配置 `frontend/.env`。该值应填写 Nginx 对外提供服务的 HTTPS 域名：
 
 ```text
 VITE_API_BASE_URL=https://your-domain.example
 ```
 
-The frontend WebSocket helper also uses this value, so keep it as an absolute `http://` or `https://` origin.
+前端 WebSocket 地址也依赖该变量，因此需要保持为完整的 `http://` 或 `https://` origin。
 
-## 7. Configure Nginx
+## 7. 配置 Nginx
 
-Copy and edit the example:
+复制示例文件并手动编辑。`cp -n` 不会覆盖已存在的目标文件：
 
 ```bash
 sudo cp -n /opt/openclaw-userlook/deploy/nginx/openclaw-userlook.conf.example /etc/nginx/sites-available/openclaw-userlook
 sudo nano /etc/nginx/sites-available/openclaw-userlook
 ```
 
-Update:
+需要修改：
 
 - `server_name`
 - `ssl_certificate`
 - `ssl_certificate_key`
 - `root /opt/openclaw-userlook/frontend/dist`
 
-The template:
+模板已经包含：
 
-- Listens on `443 ssl`.
-- Redirects HTTP `80` to HTTPS.
-- Serves frontend static files from `frontend/dist`.
-- Proxies `/api/` to `http://127.0.0.1:10009`.
-- Proxies `/api/ws/` with WebSocket headers: `Upgrade`, `Connection`, and `proxy_http_version 1.1`.
-- Sets `client_max_body_size 100m`.
-- Does not proxy OpenClaw Gateway and does not expose port `18789`.
+- 监听 `443 ssl`。
+- HTTP `80` 自动跳转 HTTPS。
+- 从 `frontend/dist` 托管前端静态文件。
+- `/api/` 反向代理到 `http://127.0.0.1:10009`。
+- `/api/ws/` 支持 WebSocket proxy，包含 `Upgrade`、`Connection`、`proxy_http_version 1.1`。
+- `client_max_body_size 100m` 上传大小限制。
+- 不代理 OpenClaw Gateway。
+- 不暴露 `18789`。
 
-Enable and test:
+启用并检查 Nginx：
 
 ```bash
 sudo ln -s /etc/nginx/sites-available/openclaw-userlook /etc/nginx/sites-enabled/openclaw-userlook
@@ -161,11 +162,11 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-Certificate issuance is intentionally not automated in this phase.
+本阶段不实现自动申请证书。证书文件需要提前准备，并在 Nginx 配置中填写正确路径。
 
-## 8. Start systemd
+## 8. 启动 systemd
 
-Create a service user and writable runtime directories as appropriate for your server:
+根据服务器实际情况创建服务用户和运行目录：
 
 ```bash
 sudo useradd --system --home /opt/openclaw-userlook --shell /usr/sbin/nologin openclaw
@@ -173,14 +174,14 @@ sudo mkdir -p /data/openclaw-userlook/uploads /data/openclaw-userlook/outputs /o
 sudo chown -R openclaw:openclaw /opt/openclaw-userlook /data/openclaw-userlook
 ```
 
-Copy and edit the backend service:
+复制并编辑后端服务模板。`cp -n` 不会覆盖已存在的目标文件：
 
 ```bash
 sudo cp -n /opt/openclaw-userlook/deploy/systemd/openclaw-userlook-backend.service.example /etc/systemd/system/openclaw-userlook-backend.service
 sudo nano /etc/systemd/system/openclaw-userlook-backend.service
 ```
 
-Then start it:
+启动服务：
 
 ```bash
 sudo systemctl daemon-reload
@@ -188,28 +189,36 @@ sudo systemctl enable --now openclaw-userlook-backend.service
 sudo systemctl status openclaw-userlook-backend.service
 ```
 
-The worker service is a placeholder template because Phase 10 does not implement Redis, Celery, or another standalone worker. Do not enable it unless you replace `ExecStart` with a real command.
+后端 systemd 服务要求：
 
-## 9. Check OpenClaw Gateway
+- `WorkingDirectory` 指向 `backend`。
+- `EnvironmentFile` 指向 `backend/.env`。
+- `ExecStart` 使用 `backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 10009`。
+- `Restart=always`。
+- 日志写入 `backend/logs/`。
 
-OpenClaw Gateway must run independently on the server and listen locally:
+`openclaw-userlook-worker.service.example` 只是占位模板，因为第十阶段不实现 Redis、Celery 或独立 worker。除非替换为真实命令，否则不要启用该服务。
+
+## 9. 检查 OpenClaw Gateway 是否运行
+
+OpenClaw Gateway 需要作为独立服务运行，并且只监听本机地址：
 
 ```bash
 sudo systemctl status openclaw-gateway.service
 ss -lntp | grep 18789
 ```
 
-Expected binding:
+期望监听地址：
 
 ```text
 127.0.0.1:18789
 ```
 
-Do not expose `18789` through Nginx or the firewall.
+不要通过 Nginx 或防火墙暴露 `18789`。
 
-## 10. Check WebSocket Proxy
+## 10. 检查 WebSocket 代理是否正常
 
-Run basic backend and proxy checks:
+先检查后端和 Nginx API 代理：
 
 ```bash
 cd /opt/openclaw-userlook
@@ -217,31 +226,31 @@ bash deploy/scripts/check_service.sh
 PUBLIC_URL=https://your-domain.example bash deploy/scripts/check_service.sh
 ```
 
-For a real WebSocket check, create or choose a conversation in the UI, get a valid JWT, then test:
+真实 WebSocket 检查需要有效 JWT 和会话 ID。可以先在页面中创建或选择一个 conversation，再执行：
 
 ```bash
 wscat -c 'wss://your-domain.example/api/ws/conversations/<conversation_id>?token=<JWT>'
 ```
 
-The browser should connect only to `/api/ws/...` on the HTTPS domain. It must never connect directly to `127.0.0.1:18789` or a public `18789` port.
+浏览器只应连接 HTTPS 域名下的 `/api/ws/...`，不能直接连接 `127.0.0.1:18789`，也不能连接任何公网 `18789` 端口。
 
-## Manual Backend Start
+## 手动启动后端
 
-For one-off troubleshooting without systemd:
+不通过 systemd 排查问题时，可以临时手动启动：
 
 ```bash
 cd /opt/openclaw-userlook
 bash deploy/scripts/start_backend.sh
 ```
 
-This starts uvicorn on `127.0.0.1:10009` and writes logs to `backend/logs/`.
+该脚本会启动 uvicorn，监听 `127.0.0.1:10009`，并把日志写入 `backend/logs/`。
 
-## Verification Checklist
+## 验收检查
 
-- `deploy/` contains Nginx, systemd, scripts, and this README.
-- `frontend/dist` exists after `npm run build`.
-- FastAPI listens on `127.0.0.1:10009`.
-- Nginx serves HTTPS and proxies `/api/`.
-- `/api/ws/` upgrades WebSocket connections.
-- OpenClaw Gateway remains local-only on `127.0.0.1:18789`.
-- No Docker, Kubernetes, certificate automation, Redis, or Celery is required for this phase.
+- `deploy/` 包含 Nginx、systemd、scripts 和本 README。
+- 执行 `npm run build` 后存在 `frontend/dist`。
+- FastAPI 监听 `127.0.0.1:10009`。
+- Nginx 提供 HTTPS，并代理 `/api/`。
+- `/api/ws/` 可以升级 WebSocket 连接。
+- OpenClaw Gateway 保持本机监听 `127.0.0.1:18789`。
+- 本阶段不要求 Docker、Kubernetes、自动证书申请、Redis 或 Celery。
