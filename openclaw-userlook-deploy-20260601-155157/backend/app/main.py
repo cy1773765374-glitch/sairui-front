@@ -33,12 +33,3 @@ app.include_router(runs_router, prefix="/api")
 app.include_router(wecom_router, prefix="/api")
 app.include_router(ws_chat_router, prefix="/api")
 app.include_router(health_router, prefix="/api")
-
-
-@app.get("/")
-def root() -> dict[str, str]:
-    return {
-        "status": "ok",
-        "service": settings.app_name,
-        "health": "/api/health",
-    }
