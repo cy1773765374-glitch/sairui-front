@@ -1,9 +1,0 @@
-﻿服务器 IP 部署提示
-
-1. 上传并解压到 /opt/openclaw-userlook。
-2. 在服务器创建 backend/.env，不要使用本地真实 .env。
-3. 如果没有域名，服务器构建前端前创建 frontend/.env：
-   VITE_API_BASE_URL=http://服务器公网IP
-4. 后端仍监听 127.0.0.1:10009，由 Nginx 代理 /api/ 和 /api/ws/。
-5. 创建 MySQL 数据库后执行：cd backend && .venv/bin/python -m app.init_db
-6. 创建 /data/openclaw-userlook/uploads 和 /data/openclaw-userlook/outputs，并给运行后端的用户写权限。
