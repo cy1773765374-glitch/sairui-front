@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from uuid import uuid4
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -14,6 +15,7 @@ from app.models.conversation import Conversation
 from app.models.user import User
 
 GATEWAY_UNAVAILABLE_MESSAGE = "OpenClaw Gateway 连接失败，请检查 openclaw-gateway.service 是否运行"
+GATEWAY_HANDSHAKE_FAILED_MESSAGE = "OpenClaw Gateway 握手失败，请检查 Gateway 协议、Token 或权限配置"
 
 GatewayEventType = Literal["delta", "done", "error", "run_status"]
 GatewayRunStatus = Literal["pending", "running", "success", "failed", "cancelled"]
@@ -110,6 +112,7 @@ class OpenClawGatewayClient:
                 ping_interval=20,
                 ping_timeout=20,
             ) as gateway_ws:
+                await self._connect_gateway(gateway_ws)
                 await gateway_ws.send(json.dumps(request_payload, ensure_ascii=False))
 
                 while True:
@@ -135,6 +138,78 @@ class OpenClawGatewayClient:
             return {}
         return {"Authorization": f"Bearer {self.token}"}
 
+    async def _connect_gateway(self, gateway_ws: Any) -> None:
+        try:
+            raw_challenge = await asyncio.wait_for(gateway_ws.recv(), timeout=5)
+        except TimeoutError as exc:
+            raise OpenClawGatewayConnectionError(GATEWAY_HANDSHAKE_FAILED_MESSAGE) from exc
+
+        challenge = self._decode_json_frame(raw_challenge)
+        if (
+            not isinstance(challenge, dict)
+            or challenge.get("type") != "event"
+            or challenge.get("event") != "connect.challenge"
+        ):
+            raise OpenClawGatewayConnectionError(GATEWAY_HANDSHAKE_FAILED_MESSAGE)
+
+        request_id = f"connect-{uuid4().hex}"
+        nonce = challenge.get("payload", {}).get("nonce") if isinstance(challenge.get("payload"), dict) else None
+        connect_payload = {
+            "type": "req",
+            "id": request_id,
+            "method": "connect",
+            "params": {
+                "minProtocol": 3,
+                "maxProtocol": 4,
+                "client": {
+                    "id": "gateway-client",
+                    "version": "openclaw-userlook",
+                    "platform": "linux",
+                    "mode": "backend",
+                },
+                "role": "operator",
+                "scopes": ["operator.read", "operator.write"],
+                "caps": [],
+                "commands": [],
+                "permissions": {},
+                "auth": {"token": self.token},
+                "locale": "zh-CN",
+                "userAgent": "openclaw-userlook-backend",
+            },
+        }
+        if isinstance(nonce, str) and nonce:
+            connect_payload["params"]["challenge"] = {"nonce": nonce}
+
+        await gateway_ws.send(json.dumps(connect_payload, ensure_ascii=False))
+
+        while True:
+            try:
+                raw_response = await asyncio.wait_for(gateway_ws.recv(), timeout=5)
+            except TimeoutError as exc:
+                raise OpenClawGatewayConnectionError(GATEWAY_HANDSHAKE_FAILED_MESSAGE) from exc
+
+            response = self._decode_json_frame(raw_response)
+            if not isinstance(response, dict):
+                continue
+            if response.get("type") == "res" and response.get("id") == request_id:
+                if response.get("ok") is True:
+                    return
+                raise OpenClawGatewayConnectionError(
+                    self._extract_error_message(response) or GATEWAY_HANDSHAKE_FAILED_MESSAGE
+                )
+            if response.get("type") == "event" and response.get("event") == "connect.challenge":
+                continue
+
+    def _decode_json_frame(self, raw_message: str | bytes) -> Any:
+        if isinstance(raw_message, bytes):
+            raw_text = raw_message.decode("utf-8", errors="replace")
+        else:
+            raw_text = raw_message
+        try:
+            return json.loads(raw_text)
+        except json.JSONDecodeError:
+            return raw_text
+
     def _build_chat_request(
         self,
         *,
@@ -147,38 +222,64 @@ class OpenClawGatewayClient:
         run_id: int | None,
         output_dir: str | None,
     ) -> dict[str, Any]:
-        payload = {
-            "type": "chat",
-            "action": "chat",
-            "stream": True,
-            "agent_id": agent.openclaw_agent_id,
-            "session_key": conversation.session_key,
-            "conversation": {
-                "id": conversation.id,
-                "title": conversation.title,
-                "session_key": conversation.session_key,
-            },
-            "run": {
-                "id": run_id,
-                "output_dir": output_dir,
-            },
-            "user": {
-                "id": user.id,
-                "username": user.username,
-                "display_name": user.display_name,
-                "role": user.role.value,
-            },
-            "message": {
-                "role": "user",
-                "content": content,
+        params: dict[str, Any] = {
+            "agentId": agent.openclaw_agent_id,
+            "sessionKey": conversation.session_key,
+            "message": content,
+            "deliver": False,
+            "timeoutMs": self.timeout_seconds * 1000,
+            "idempotencyKey": f"openclaw-userlook:{run_id}" if run_id is not None else uuid4().hex,
+            "metadata": {
+                "source": "openclaw-userlook",
+                "user": {
+                    "id": user.id,
+                    "username": user.username,
+                    "display_name": user.display_name,
+                    "role": user.role.value,
+                },
+                "conversation": {
+                    "id": conversation.id,
+                    "title": conversation.title,
+                    "session_key": conversation.session_key,
+                },
+                "run": {
+                    "id": run_id,
+                    "output_dir": output_dir,
+                },
                 "file_ids": file_ids,
-                "files": files,
             },
-            "files": files,
         }
+        attachments = self._build_attachments(files)
+        if attachments:
+            params["attachments"] = attachments
+            params["files"] = files
         if output_dir:
-            payload["output_dir"] = output_dir
+            params["outputDir"] = output_dir
+            params["output_dir"] = output_dir
+        payload = {
+            "type": "req",
+            "id": f"chat-{run_id or uuid4().hex}",
+            "method": "chat.send",
+            "params": params,
+        }
         return payload
+
+    def _build_attachments(self, files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        attachments: list[dict[str, Any]] = []
+        for file in files:
+            path = file.get("path") or file.get("stored_path")
+            if not isinstance(path, str) or not path:
+                continue
+            attachments.append(
+                {
+                    "name": file.get("original_name") or path.rsplit("/", 1)[-1],
+                    "path": path,
+                    "mimeType": file.get("file_type"),
+                    "size": file.get("file_size"),
+                    "source": "openclaw-userlook",
+                }
+            )
+        return attachments
 
     def _parse_gateway_message(self, raw_message: str | bytes) -> OpenClawGatewayEvent:
         if isinstance(raw_message, bytes):
@@ -186,16 +287,45 @@ class OpenClawGatewayClient:
         else:
             raw_text = raw_message
 
-        try:
-            payload = json.loads(raw_text)
-        except json.JSONDecodeError:
-            return OpenClawGatewayEvent(type="delta", content=raw_text)
+        payload = self._decode_json_frame(raw_text)
+        if isinstance(payload, str):
+            return OpenClawGatewayEvent(type="delta", content=payload)
 
         if not isinstance(payload, dict):
             return OpenClawGatewayEvent(type="delta", content=str(payload))
 
+        if payload.get("type") == "res":
+            if payload.get("ok") is False:
+                return OpenClawGatewayEvent(
+                    type="error",
+                    content=self._extract_error_message(payload),
+                    status="failed",
+                    raw=payload,
+                )
+            result_payload = payload.get("payload")
+            if isinstance(result_payload, dict):
+                if self._is_terminal_response(result_payload):
+                    return OpenClawGatewayEvent(
+                        type="done",
+                        content=self._extract_text(result_payload),
+                        status="success",
+                        output_dir=self._extract_output_dir(result_payload),
+                        raw=payload,
+                    )
+                text = self._extract_text(result_payload)
+                status = self._extract_status(result_payload)
+                if text:
+                    return OpenClawGatewayEvent(type="delta", content=text, raw=payload)
+                return OpenClawGatewayEvent(
+                    type="run_status",
+                    status=self._normalize_run_status(status or "running"),
+                    raw=payload,
+                )
+
         event_type = self._normalize_state_token(
-            payload.get("type")
+            payload.get("event")
+            if payload.get("type") == "event"
+            else payload.get("type")
             or payload.get("event")
             or payload.get("status")
             or payload.get("state")
@@ -204,7 +334,9 @@ class OpenClawGatewayClient:
         status_value = self._normalize_state_token(payload.get("status") or payload.get("state") or "")
         normalized_state = status_value or event_type
 
-        if normalized_state in FAILED_STATES:
+        event_kind = self._classify_event_type(normalized_state)
+
+        if normalized_state in FAILED_STATES or event_kind == "error":
             return OpenClawGatewayEvent(
                 type="error",
                 content=self._extract_error_message(payload),
@@ -212,7 +344,7 @@ class OpenClawGatewayClient:
                 raw=payload,
             )
 
-        if normalized_state in CANCELLED_STATES:
+        if normalized_state in CANCELLED_STATES or event_kind == "cancelled":
             return OpenClawGatewayEvent(
                 type="error",
                 content=self._extract_error_message(payload) or "OpenClaw Gateway 调用已取消",
@@ -220,7 +352,7 @@ class OpenClawGatewayClient:
                 raw=payload,
             )
 
-        if normalized_state in SUCCESS_STATES:
+        if normalized_state in SUCCESS_STATES or event_kind == "done":
             return OpenClawGatewayEvent(
                 type="done",
                 content=self._extract_text(payload),
@@ -229,7 +361,7 @@ class OpenClawGatewayClient:
                 raw=payload,
             )
 
-        if event_type in STATUS_EVENTS:
+        if event_type in STATUS_EVENTS or event_kind == "run_status":
             return OpenClawGatewayEvent(
                 type="run_status",
                 status=self._normalize_run_status(status_value or event_type),
@@ -238,7 +370,7 @@ class OpenClawGatewayClient:
             )
 
         text = self._extract_text(payload)
-        if event_type in DELTA_EVENTS and text:
+        if (event_type in DELTA_EVENTS or event_kind == "delta") and text:
             return OpenClawGatewayEvent(type="delta", content=text, raw=payload)
 
         if text:
@@ -250,10 +382,48 @@ class OpenClawGatewayClient:
             raw=payload,
         )
 
+    def _is_terminal_response(self, payload: dict[str, Any]) -> bool:
+        status = self._normalize_state_token(self._extract_status(payload))
+        if status in SUCCESS_STATES:
+            return True
+        if any(key in payload for key in ("response", "reply", "assistant", "final", "result")):
+            return True
+        return False
+
+    def _extract_status(self, payload: dict[str, Any]) -> str:
+        for key in ("status", "state", "phase"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                return value
+        for value in payload.values():
+            if isinstance(value, dict):
+                nested = self._extract_status(value)
+                if nested:
+                    return nested
+        return ""
+
     def _normalize_state_token(self, value: Any) -> str:
         if not isinstance(value, str):
             return ""
         return value.strip().lower().replace("-", "_").replace(" ", "_")
+
+    def _classify_event_type(
+        self,
+        value: str,
+    ) -> Literal["delta", "done", "error", "cancelled", "run_status", "unknown"]:
+        token = self._normalize_state_token(value)
+        parts = set(token.replace(".", "_").replace(":", "_").split("_"))
+        if token in FAILED_STATES or parts & {"error", "failed", "failure", "exception"}:
+            return "error"
+        if token in CANCELLED_STATES or parts & {"cancelled", "canceled", "abort", "aborted"}:
+            return "cancelled"
+        if token in SUCCESS_STATES or parts & {"done", "complete", "completed", "finished", "success"}:
+            return "done"
+        if token in DELTA_EVENTS or parts & {"delta", "chunk", "token"}:
+            return "delta"
+        if token in STATUS_EVENTS or parts & {"status", "progress", "running", "started", "queued"}:
+            return "run_status"
+        return "unknown"
 
     def _normalize_run_status(self, value: str) -> GatewayRunStatus:
         normalized = self._normalize_state_token(value)
@@ -268,7 +438,21 @@ class OpenClawGatewayClient:
         return "running"
 
     def _extract_text(self, payload: dict[str, Any]) -> str:
-        for key in ("delta", "content", "text", "message", "output", "answer", "data"):
+        for key in (
+            "delta",
+            "content",
+            "text",
+            "message",
+            "output",
+            "answer",
+            "response",
+            "reply",
+            "assistant",
+            "final",
+            "result",
+            "payload",
+            "data",
+        ):
             value = payload.get(key)
             if isinstance(value, str):
                 return value
@@ -318,7 +502,7 @@ class OpenClawGatewayClient:
         return None
 
     def _extract_error_message(self, payload: dict[str, Any]) -> str:
-        for key in ("message", "error", "detail", "content"):
+        for key in ("message", "error", "detail", "content", "payload", "data"):
             value = payload.get(key)
             if isinstance(value, str) and value:
                 return value
