@@ -228,6 +228,24 @@ async def chat_websocket(
                         active_task_run = None
                         break
 
+                    final_text = event.content or ""
+                    if final_text:
+                        if not assistant_content:
+                            final_delta = final_text
+                        elif final_text.startswith(assistant_content):
+                            final_delta = final_text[len(assistant_content):]
+                        elif final_text not in assistant_content:
+                            final_delta = final_text
+                        else:
+                            final_delta = ""
+
+                        if final_delta:
+                            assistant_content += final_delta
+                            await connection_manager.send_json(
+                                websocket,
+                                {"type": "assistant_delta", "content": final_delta},
+                            )
+
                     final_output_dir = event.output_dir or task_run.output_dir
                     assistant_message = save_message(
                         db,
