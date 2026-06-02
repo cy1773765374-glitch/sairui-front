@@ -23,6 +23,7 @@ from app.services.file_service import (
 from app.services.openclaw_adapter import OpenClawAdapter
 from app.services.run_service import (
     create_task_run,
+    mark_task_run_cancelled,
     mark_task_run_failed,
     mark_task_run_running,
     mark_task_run_success,
@@ -204,18 +205,34 @@ async def chat_websocket(
                         continue
 
                     if event.type == "error":
-                        task_run = mark_task_run_failed(
-                            db,
-                            task_run,
-                            event.content or "OpenClaw call failed",
+                        terminal_status = event.status or "failed"
+                        if terminal_status == "cancelled":
+                            task_run = mark_task_run_cancelled(
+                                db,
+                                task_run,
+                                event.content or "OpenClaw call cancelled",
+                            )
+                        else:
+                            task_run = mark_task_run_failed(
+                                db,
+                                task_run,
+                                event.content or "OpenClaw call failed",
+                            )
+                        await connection_manager.send_json(
+                            websocket,
+                            {
+                                "type": "error",
+                                "message": event.content or "OpenClaw 调用失败",
+                            },
                         )
                         await connection_manager.send_json(
                             websocket,
-                            {"type": "error", "message": event.content or "OpenClaw 调用失败"},
-                        )
-                        await connection_manager.send_json(
-                            websocket,
-                            {"type": "run_status", "run_id": task_run.id, "status": "failed"},
+                            {
+                                "type": "run_status",
+                                "run_id": task_run.id,
+                                "status": terminal_status,
+                                "message": event.content,
+                            },
                         )
                         if assistant_content:
                             save_message(
@@ -223,7 +240,7 @@ async def chat_websocket(
                                 conversation,
                                 MessageRole.assistant,
                                 assistant_content,
-                                raw_payload={"error": True},
+                                raw_payload={"error": True, "gateway_event": event.raw},
                             )
                         active_task_run = None
                         break
@@ -252,7 +269,10 @@ async def chat_websocket(
                         conversation,
                         MessageRole.assistant,
                         assistant_content,
-                        raw_payload={"mock": adapter.settings.mock_openclaw},
+                        raw_payload={
+                            "mock": adapter.settings.mock_openclaw,
+                            "gateway_event": event.raw,
+                        },
                     )
                     task_run = mark_task_run_success(
                         db,

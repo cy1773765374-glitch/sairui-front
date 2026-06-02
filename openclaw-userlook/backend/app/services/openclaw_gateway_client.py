@@ -16,13 +16,48 @@ from app.models.user import User
 GATEWAY_UNAVAILABLE_MESSAGE = "OpenClaw Gateway 连接失败，请检查 openclaw-gateway.service 是否运行"
 
 GatewayEventType = Literal["delta", "done", "error", "run_status"]
+GatewayRunStatus = Literal["pending", "running", "success", "failed", "cancelled"]
+
+PENDING_STATES = {"queued", "queueing", "pending", "created", "received", "waiting"}
+RUNNING_STATES = {
+    "running",
+    "started",
+    "start",
+    "working",
+    "processing",
+    "in_progress",
+    "progress",
+    "streaming",
+}
+SUCCESS_STATES = {
+    "done",
+    "assistant_done",
+    "end",
+    "completed",
+    "complete",
+    "finished",
+    "success",
+    "succeeded",
+}
+FAILED_STATES = {"error", "failed", "failure", "exception", "timeout"}
+CANCELLED_STATES = {"cancelled", "canceled", "cancel", "aborted", "abort"}
+DELTA_EVENTS = {
+    "delta",
+    "assistant_delta",
+    "message",
+    "assistant_message",
+    "chunk",
+    "token",
+    "text",
+}
+STATUS_EVENTS = PENDING_STATES | RUNNING_STATES | {"run_status", "status", "state"}
 
 
 @dataclass(frozen=True)
 class OpenClawGatewayEvent:
     type: GatewayEventType
     content: str | None = None
-    status: str | None = None
+    status: GatewayRunStatus | None = None
     output_dir: str | None = None
     raw: dict[str, Any] | None = None
 
@@ -159,54 +194,78 @@ class OpenClawGatewayClient:
         if not isinstance(payload, dict):
             return OpenClawGatewayEvent(type="delta", content=str(payload))
 
-        event_type = str(
+        event_type = self._normalize_state_token(
             payload.get("type")
             or payload.get("event")
             or payload.get("status")
             or payload.get("state")
             or ""
-        ).lower()
-        status_value = str(payload.get("status") or payload.get("state") or "").lower()
+        )
+        status_value = self._normalize_state_token(payload.get("status") or payload.get("state") or "")
         normalized_state = status_value or event_type
 
-        if normalized_state in {"error", "failed", "failure", "exception"}:
+        if normalized_state in FAILED_STATES:
             return OpenClawGatewayEvent(
                 type="error",
                 content=self._extract_error_message(payload),
+                status="failed",
                 raw=payload,
             )
 
-        if normalized_state in {"done", "assistant_done", "end", "completed", "complete", "finished", "success"}:
+        if normalized_state in CANCELLED_STATES:
+            return OpenClawGatewayEvent(
+                type="error",
+                content=self._extract_error_message(payload) or "OpenClaw Gateway 调用已取消",
+                status="cancelled",
+                raw=payload,
+            )
+
+        if normalized_state in SUCCESS_STATES:
             return OpenClawGatewayEvent(
                 type="done",
                 content=self._extract_text(payload),
+                status="success",
                 output_dir=self._extract_output_dir(payload),
                 raw=payload,
             )
 
-        if event_type in {
-            "run_status",
-            "status",
-            "progress",
-            "queued",
-            "pending",
-            "started",
-            "start",
-            "running",
-            "working",
-        }:
+        if event_type in STATUS_EVENTS:
             return OpenClawGatewayEvent(
                 type="run_status",
-                status=str(payload.get("status") or event_type),
+                status=self._normalize_run_status(status_value or event_type),
                 content=self._extract_text(payload),
                 raw=payload,
             )
 
         text = self._extract_text(payload)
+        if event_type in DELTA_EVENTS and text:
+            return OpenClawGatewayEvent(type="delta", content=text, raw=payload)
+
         if text:
             return OpenClawGatewayEvent(type="delta", content=text, raw=payload)
 
-        return OpenClawGatewayEvent(type="run_status", status=event_type or "received", raw=payload)
+        return OpenClawGatewayEvent(
+            type="run_status",
+            status=self._normalize_run_status(event_type or "received"),
+            raw=payload,
+        )
+
+    def _normalize_state_token(self, value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        return value.strip().lower().replace("-", "_").replace(" ", "_")
+
+    def _normalize_run_status(self, value: str) -> GatewayRunStatus:
+        normalized = self._normalize_state_token(value)
+        if normalized in PENDING_STATES:
+            return "pending"
+        if normalized in SUCCESS_STATES:
+            return "success"
+        if normalized in FAILED_STATES:
+            return "failed"
+        if normalized in CANCELLED_STATES:
+            return "cancelled"
+        return "running"
 
     def _extract_text(self, payload: dict[str, Any]) -> str:
         for key in ("delta", "content", "text", "message", "output", "answer", "data"):
@@ -214,7 +273,14 @@ class OpenClawGatewayClient:
             if isinstance(value, str):
                 return value
             if isinstance(value, list):
-                text_parts = [item for item in value if isinstance(item, str)]
+                text_parts: list[str] = []
+                for item in value:
+                    if isinstance(item, str):
+                        text_parts.append(item)
+                    elif isinstance(item, dict):
+                        nested = self._extract_text(item)
+                        if nested:
+                            text_parts.append(nested)
                 if text_parts:
                     return "".join(text_parts)
             if isinstance(value, dict):
@@ -232,6 +298,23 @@ class OpenClawGatewayClient:
                 nested = self._extract_output_dir(value)
                 if nested:
                     return nested
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        nested = self._extract_output_dir(item)
+                        if nested:
+                            return nested
+        for value in payload.values():
+            if isinstance(value, dict):
+                nested = self._extract_output_dir(value)
+                if nested:
+                    return nested
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        nested = self._extract_output_dir(item)
+                        if nested:
+                            return nested
         return None
 
     def _extract_error_message(self, payload: dict[str, Any]) -> str:

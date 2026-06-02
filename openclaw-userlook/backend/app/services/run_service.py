@@ -98,6 +98,15 @@ def mark_task_run_failed(db: Session, run: TaskRun, error_message: str) -> TaskR
     return run
 
 
+def mark_task_run_cancelled(db: Session, run: TaskRun, message: str | None = None) -> TaskRun:
+    run.status = TaskRunStatus.cancelled
+    run.error_message = message
+    run.finished_at = _utc_now()
+    db.commit()
+    db.refresh(run)
+    return run
+
+
 def list_task_runs(db: Session, current_user: User) -> list[TaskRunRead]:
     statement = (
         select(TaskRun, Agent)
