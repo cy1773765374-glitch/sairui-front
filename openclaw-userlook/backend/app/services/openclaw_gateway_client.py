@@ -179,6 +179,7 @@ class OpenClawGatewayClient:
         if normalized_state in {"done", "assistant_done", "end", "completed", "complete", "finished", "success"}:
             return OpenClawGatewayEvent(
                 type="done",
+                content=self._extract_text(payload),
                 output_dir=self._extract_output_dir(payload),
                 raw=payload,
             )
