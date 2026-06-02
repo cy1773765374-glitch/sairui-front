@@ -32,7 +32,9 @@ defineProps<{
 }
 
 .message-bubble {
+  width: fit-content;
   max-width: min(760px, 84%);
+  min-width: 88px;
   padding: 12px 14px;
   border: 1px solid #dfe5ee;
   border-radius: 18px;
@@ -41,7 +43,13 @@ defineProps<{
   box-shadow: 0 1px 2px rgb(60 64 67 / 8%);
 }
 
+.message-row--assistant .message-bubble,
+.message-row--system .message-bubble {
+  width: min(760px, 84%);
+}
+
 .message-row--user .message-bubble {
+  max-width: min(520px, 72%);
   border-color: #dfe9fb;
   background: #dfe9fb;
 }
@@ -55,7 +63,8 @@ defineProps<{
 
 .message-content {
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  word-break: normal;
+  overflow-wrap: break-word;
   line-height: 1.65;
 }
 

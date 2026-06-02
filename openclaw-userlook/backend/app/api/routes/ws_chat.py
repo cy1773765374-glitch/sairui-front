@@ -162,6 +162,42 @@ async def chat_websocket(
         adapter = OpenClawAdapter()
         active_task_run: TaskRun | None = None
         active_run_task: asyncio.Task[None] | None = None
+        websocket_active = True
+
+        async def send_json(payload: dict) -> None:
+            if not websocket_active:
+                return
+            with contextlib.suppress(Exception):
+                await connection_manager.send_json(websocket, payload)
+
+        async def send_run_status(
+            *,
+            run_id: int,
+            status_value: str,
+            message: str | None = None,
+            output_files: list | None = None,
+        ) -> None:
+            payload = {"type": "run_status", "run_id": run_id, "status": status_value}
+            if message:
+                payload["message"] = message
+            if output_files is not None:
+                payload["output_files"] = output_files
+            await send_json(payload)
+
+        async def send_assistant_done(
+            *,
+            message_id: int,
+            run_id: int,
+            output_files: list,
+        ) -> None:
+            await send_json(
+                {
+                    "type": "assistant_done",
+                    "message_id": message_id,
+                    "run_id": run_id,
+                    "output_files": output_files,
+                }
+            )
 
         async def run_agent_message(
             inbound_message: WebSocketUserMessage,
@@ -173,7 +209,7 @@ async def chat_websocket(
             last_gateway_event = None
             try:
                 task_run = mark_task_run_running(db, task_run)
-                await _send_run_status(websocket, run_id=task_run.id, status_value="running")
+                await send_run_status(run_id=task_run.id, status_value="running")
 
                 async for event in adapter.stream_chat(
                     user=current_user,
@@ -190,10 +226,7 @@ async def chat_websocket(
                         part = _extract_incremental_text(assistant_content, event.content)
                         if part:
                             assistant_content += part
-                            await connection_manager.send_json(
-                                websocket,
-                                {"type": "assistant_delta", "content": part},
-                            )
+                            await send_json({"type": "assistant_delta", "content": part})
                         continue
 
                     if event.type == "run_status":
@@ -201,8 +234,7 @@ async def chat_websocket(
                         if event_status in TERMINAL_RUN_STATUSES:
                             terminal_event = event
                         else:
-                            await _send_run_status(
-                                websocket,
+                            await send_run_status(
                                 run_id=task_run.id,
                                 status_value=event_status,
                                 message=event.content,
@@ -239,22 +271,19 @@ async def chat_websocket(
                                     "gateway_event": terminal_event.raw,
                                 },
                             )
-                            await _send_assistant_done(
-                                websocket,
+                            await send_assistant_done(
                                 message_id=assistant_message.id,
                                 run_id=task_run.id,
                                 output_files=[],
                             )
                         if terminal_status != "cancelled":
-                            await connection_manager.send_json(
-                                websocket,
+                            await send_json(
                                 {
                                     "type": "error",
                                     "message": terminal_event.content or "OpenClaw 调用失败",
                                 },
                             )
-                        await _send_run_status(
-                            websocket,
+                        await send_run_status(
                             run_id=task_run.id,
                             status_value=terminal_status,
                             message=terminal_event.content,
@@ -264,10 +293,7 @@ async def chat_websocket(
                     final_delta = _extract_incremental_text(assistant_content, terminal_event.content)
                     if final_delta:
                         assistant_content += final_delta
-                        await connection_manager.send_json(
-                            websocket,
-                            {"type": "assistant_delta", "content": final_delta},
-                        )
+                        await send_json({"type": "assistant_delta", "content": final_delta})
 
                     final_output_dir = terminal_event.output_dir or task_run.output_dir
                     assistant_message = save_message(
@@ -288,14 +314,12 @@ async def chat_websocket(
                     )
                     output_files = register_output_files(db, current_user.id, task_run.output_dir)
                     output_files_payload = jsonable_encoder(output_files)
-                    await _send_assistant_done(
-                        websocket,
+                    await send_assistant_done(
                         message_id=assistant_message.id,
                         run_id=task_run.id,
                         output_files=output_files_payload,
                     )
-                    await _send_run_status(
-                        websocket,
+                    await send_run_status(
                         run_id=task_run.id,
                         status_value="success",
                         output_files=output_files_payload,
@@ -316,14 +340,12 @@ async def chat_websocket(
                         assistant_content,
                         raw_payload={"cancelled": True, "gateway_event": last_gateway_event},
                     )
-                    await _send_assistant_done(
-                        websocket,
+                    await send_assistant_done(
                         message_id=assistant_message.id,
                         run_id=task_run.id,
                         output_files=[],
                     )
-                await _send_run_status(
-                    websocket,
+                await send_run_status(
                     run_id=task_run.id,
                     status_value="cancelled",
                     message="用户已停止生成",
@@ -336,12 +358,8 @@ async def chat_websocket(
                     str(exc) or "OpenClaw call failed",
                     output_text=assistant_content or None,
                 )
-                await connection_manager.send_json(
-                    websocket,
-                    {"type": "error", "message": str(exc) or "OpenClaw 调用失败"},
-                )
-                await _send_run_status(
-                    websocket,
+                await send_json({"type": "error", "message": str(exc) or "OpenClaw 调用失败"})
+                await send_run_status(
                     run_id=task_run.id,
                     status_value="failed",
                     message=str(exc) or "OpenClaw call failed",
@@ -361,18 +379,14 @@ async def chat_websocket(
                     try:
                         cancel_message = WebSocketCancelRunMessage.model_validate(raw_message)
                     except ValidationError:
-                        await connection_manager.send_json(
-                            websocket,
-                            {"type": "error", "message": "invalid cancel message format"},
-                        )
+                        await send_json({"type": "error", "message": "invalid cancel message format"})
                         continue
                     if (
                         active_task_run is None
                         or active_run_task is None
                         or active_task_run.id != cancel_message.run_id
                     ):
-                        await _send_run_status(
-                            websocket,
+                        await send_run_status(
                             run_id=cancel_message.run_id,
                             status_value="cancelled",
                             message="没有正在运行的任务",
@@ -384,19 +398,13 @@ async def chat_websocket(
                     continue
 
                 if active_run_task is not None and not active_run_task.done():
-                    await connection_manager.send_json(
-                        websocket,
-                        {"type": "error", "message": "Agent 正在响应，请稍后再发送"},
-                    )
+                    await send_json({"type": "error", "message": "Agent 正在响应，请稍后再发送"})
                     continue
 
                 try:
                     inbound_message = WebSocketUserMessage.model_validate(raw_message)
                 except ValidationError:
-                    await connection_manager.send_json(
-                        websocket,
-                        {"type": "error", "message": "invalid message format"},
-                    )
+                    await send_json({"type": "error", "message": "invalid message format"})
                     continue
 
                 try:
@@ -407,10 +415,7 @@ async def chat_websocket(
                         inbound_message.file_ids,
                     )
                 except HTTPException:
-                    await connection_manager.send_json(
-                        websocket,
-                        {"type": "error", "message": "invalid file_ids"},
-                    )
+                    await send_json({"type": "error", "message": "invalid file_ids"})
                     continue
 
                 task_run = create_task_run(
@@ -421,7 +426,7 @@ async def chat_websocket(
                     input_text=inbound_message.content,
                 )
                 active_task_run = task_run
-                await _send_run_status(websocket, run_id=task_run.id, status_value="pending")
+                await send_run_status(run_id=task_run.id, status_value="pending")
 
                 _record_agent_call_audit(
                     db,
@@ -445,12 +450,13 @@ async def chat_websocket(
                     run_agent_message(inbound_message, task_run, gateway_files)
                 )
         except WebSocketDisconnect:
+            websocket_active = False
+            connection_manager.disconnect(conversation.id, websocket)
             if active_run_task is not None and not active_run_task.done():
-                active_run_task.cancel()
                 with contextlib.suppress(BaseException):
                     await active_run_task
-            connection_manager.disconnect(conversation.id, websocket)
         except Exception as exc:
+            websocket_active = False
             if active_run_task is not None and not active_run_task.done():
                 active_run_task.cancel()
                 with contextlib.suppress(BaseException):

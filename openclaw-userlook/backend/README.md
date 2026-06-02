@@ -169,7 +169,7 @@ OpenClaw Gateway 连接失败，请检查 openclaw-gateway.service 是否运行
 
 ## Files and Runs
 
-- `POST /api/files/upload` accepts multipart field `upload`, enforces `MAX_UPLOAD_MB`, and supports `txt`, `md`, `doc`, `docx`, `xls`, `xlsx`, `ppt`, `pptx`, `pdf`, `png`, `jpg`, and `jpeg`.
+- `POST /api/files/upload` accepts multipart field `upload`, enforces `MAX_UPLOAD_MB`, and supports common text/config, Office/OpenDocument, PDF, archive, and image files, including `txt`, `md`, `csv`, `json`, `yaml`, `docx`, `xlsx`, `pptx`, `pdf`, `zip`, `png`, `jpg`, `jpeg`, `gif`, `webp`, `bmp`, `tiff`, `svg`, `heic`, and `heif`.
 - `GET /api/files` lists upload and output files visible to the current user.
 - `GET /api/files/{file_id}/download` checks ownership and verifies the stored path stays inside the configured upload/output root.
 - `GET /api/runs` lists TaskRun history.

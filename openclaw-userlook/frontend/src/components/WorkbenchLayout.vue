@@ -30,6 +30,8 @@ const activeMenu = computed(() => {
   return route.path
 })
 
+const isChatRoute = computed(() => route.name === 'agent-chat')
+
 function logout() {
   authStore.logout()
   router.push({ name: 'login' })
@@ -95,7 +97,7 @@ function logout() {
         </div>
       </el-header>
 
-      <el-main class="workbench-content">
+      <el-main class="workbench-content" :class="{ 'workbench-content--chat': isChatRoute }">
         <slot />
       </el-main>
     </el-container>
@@ -104,9 +106,11 @@ function logout() {
 
 <style scoped>
 .workbench-layout {
+  height: 100vh;
   min-height: 100vh;
   background: #eef3f8;
   color: #202124;
+  overflow: hidden;
 }
 
 .workbench-sidebar {
@@ -171,7 +175,9 @@ function logout() {
 }
 
 .workbench-main {
+  height: 100vh;
   min-width: 0;
+  min-height: 0;
 }
 
 .workbench-header {
@@ -207,13 +213,25 @@ function logout() {
 }
 
 .workbench-content {
+  height: calc(100vh - 64px);
   min-width: 0;
+  min-height: 0;
   padding: 28px;
+  overflow: auto;
+}
+
+.workbench-content--chat {
+  display: grid;
+  padding: 12px;
+  overflow: hidden;
 }
 
 @media (max-width: 900px) {
   .workbench-layout {
     display: block;
+    height: auto;
+    min-height: 100vh;
+    overflow: auto;
   }
 
   .workbench-sidebar {
@@ -245,7 +263,13 @@ function logout() {
   }
 
   .workbench-content {
+    height: auto;
     padding: 16px;
+  }
+
+  .workbench-content--chat {
+    min-height: calc(100vh - 132px);
+    padding: 12px;
   }
 }
 </style>
