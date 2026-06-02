@@ -190,6 +190,8 @@ def request_task_run_cancel(db: Session, current_user: User, run_id: int) -> Tas
     if current_user.role != UserRole.admin and run.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found")
 
+    if run.status == TaskRunStatus.stale:
+        return mark_task_run_cancelled(db, run, "用户已停止 stale 任务")
     if run.status in TERMINAL_RUN_STATUSES:
         return run
     if run.status in {TaskRunStatus.pending, TaskRunStatus.queued}:
