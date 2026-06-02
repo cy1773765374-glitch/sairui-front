@@ -35,7 +35,7 @@ const draft = ref('')
 const scrollRef = ref<HTMLElement | null>(null)
 
 const canSend = computed(() => props.connected && !props.sending && draft.value.trim().length > 0)
-const canStop = computed(() => props.connected && ['pending', 'running'].includes(props.runStatus))
+const canStop = computed(() => ['pending', 'queued', 'running'].includes(props.runStatus))
 
 function send() {
   const content = draft.value.trim()

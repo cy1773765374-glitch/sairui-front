@@ -1,3 +1,6 @@
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -11,10 +14,29 @@ from app.api.routes.runs import router as runs_router
 from app.api.routes.wecom import router as wecom_router
 from app.api.routes.ws_chat import router as ws_chat_router
 from app.core.config import get_settings
+from app.services.run_watchdog import watchdog_loop
+from app.services.task_queue import task_queue
 
 settings = get_settings()
 
-app = FastAPI(title=settings.app_name)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    stop_event = asyncio.Event()
+    watchdog_task = asyncio.create_task(watchdog_loop(stop_event))
+    try:
+        yield
+    finally:
+        stop_event.set()
+        await task_queue.shutdown()
+        watchdog_task.cancel()
+        try:
+            await watchdog_task
+        except BaseException:
+            pass
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

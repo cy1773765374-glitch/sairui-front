@@ -16,7 +16,7 @@ const tagType = computed(() => {
   if (props.status === 'success') {
     return 'success'
   }
-  if (props.status === 'failed' || props.status === 'cancelled') {
+  if (props.status === 'failed' || props.status === 'timeout' || props.status === 'stale') {
     return 'danger'
   }
   if (props.status === 'running') {

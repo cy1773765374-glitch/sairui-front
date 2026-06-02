@@ -1,18 +1,51 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { Download, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
+import { fetchAgents, type Agent } from '../api/agents'
 import { downloadFile, formatFileSize } from '../api/files'
-import { fetchRuns, type TaskRun } from '../api/runs'
+import { fetchRuns, isActiveRunStatus, type TaskRun, type TaskRunStatus } from '../api/runs'
 
 const loading = ref(false)
 const runs = ref<TaskRun[]>([])
+const agents = ref<Agent[]>([])
+const filters = ref<{
+  status: TaskRunStatus | ''
+  agent_id: number | undefined
+  run_type: string
+  active_only: boolean
+}>({
+  status: '',
+  agent_id: undefined,
+  run_type: '',
+  active_only: false,
+})
+
+const statusOptions: Array<TaskRunStatus> = [
+  'pending',
+  'queued',
+  'running',
+  'success',
+  'failed',
+  'cancelled',
+  'timeout',
+  'stale',
+]
+
+const hasFilters = computed(
+  () => Boolean(filters.value.status || filters.value.agent_id || filters.value.run_type || filters.value.active_only),
+)
 
 async function loadRuns() {
   loading.value = true
   try {
-    runs.value = await fetchRuns()
+    runs.value = await fetchRuns({
+      status: filters.value.status || undefined,
+      agent_id: filters.value.agent_id,
+      run_type: filters.value.run_type || undefined,
+      active_only: filters.value.active_only,
+    })
   } catch {
     ElMessage.error('任务列表加载失败')
   } finally {
@@ -24,7 +57,7 @@ function statusType(status: TaskRun['status']) {
   if (status === 'success') {
     return 'success'
   }
-  if (status === 'failed' || status === 'cancelled') {
+  if (status === 'failed' || status === 'timeout' || status === 'stale') {
     return 'danger'
   }
   if (status === 'running') {
@@ -33,7 +66,35 @@ function statusType(status: TaskRun['status']) {
   return 'info'
 }
 
-onMounted(loadRuns)
+function isRunWarning(row: TaskRun) {
+  if (!isActiveRunStatus(row.status)) {
+    return false
+  }
+  const heartbeat = row.heartbeat_at || row.updated_at
+  if (!heartbeat) {
+    return false
+  }
+  return Date.now() - new Date(heartbeat).getTime() > 5 * 60 * 1000
+}
+
+function resetFilters() {
+  filters.value = {
+    status: '',
+    agent_id: undefined,
+    run_type: '',
+    active_only: false,
+  }
+  void loadRuns()
+}
+
+onMounted(async () => {
+  try {
+    agents.value = await fetchAgents()
+  } catch {
+    agents.value = []
+  }
+  await loadRuns()
+})
 </script>
 
 <template>
@@ -44,10 +105,32 @@ onMounted(loadRuns)
         <h1>任务中心</h1>
         <p>查看对话触发的 task_run 记录、运行状态和输出文件。</p>
       </div>
-      <el-button :icon="Refresh" :loading="loading" @click="loadRuns">刷新</el-button>
+      <div class="heading-actions">
+        <el-button v-if="hasFilters" plain @click="resetFilters">重置筛选</el-button>
+        <el-button :icon="Refresh" :loading="loading" @click="loadRuns">刷新</el-button>
+      </div>
     </header>
 
     <el-card class="table-card" shadow="never">
+      <div class="run-filters">
+        <el-select v-model="filters.status" clearable placeholder="status" @change="loadRuns">
+          <el-option v-for="status in statusOptions" :key="status" :label="status" :value="status" />
+        </el-select>
+        <el-select v-model="filters.agent_id" clearable filterable placeholder="agent" @change="loadRuns">
+          <el-option
+            v-for="agent in agents"
+            :key="agent.id"
+            :label="agent.name"
+            :value="agent.id"
+          />
+        </el-select>
+        <el-select v-model="filters.run_type" clearable placeholder="run_type" @change="loadRuns">
+          <el-option label="chat" value="chat" />
+          <el-option label="job" value="job" />
+          <el-option label="system" value="system" />
+        </el-select>
+        <el-checkbox v-model="filters.active_only" @change="loadRuns">仅 active</el-checkbox>
+      </div>
       <el-table v-loading="loading" :data="runs" row-key="id">
         <el-table-column type="expand">
           <template #default="{ row }">
@@ -64,6 +147,10 @@ onMounted(loadRuns)
                 <strong>错误</strong>
                 <pre>{{ row.error_message }}</pre>
               </div>
+              <div v-if="row.output_files_json">
+                <strong>输出文件快照</strong>
+                <pre>{{ JSON.stringify(row.output_files_json, null, 2) }}</pre>
+              </div>
             </div>
           </template>
         </el-table-column>
@@ -71,16 +158,31 @@ onMounted(loadRuns)
         <el-table-column label="status" width="120">
           <template #default="{ row }">
             <el-tag :type="statusType(row.status)" effect="plain">{{ row.status }}</el-tag>
+            <el-tag v-if="isRunWarning(row)" class="warning-tag" type="danger" effect="plain">
+              heartbeat 过旧
+            </el-tag>
           </template>
         </el-table-column>
+        <el-table-column prop="run_type" label="run_type" width="110" />
+        <el-table-column prop="priority" label="priority" width="100" />
         <el-table-column label="agent" min-width="170">
           <template #default="{ row }">
             {{ row.agent_name || row.agent_code || row.agent_id }}
           </template>
         </el-table-column>
         <el-table-column prop="created_at" label="created_at" min-width="180" />
+        <el-table-column prop="queued_at" label="queued_at" min-width="180" />
         <el-table-column prop="started_at" label="started_at" min-width="180" />
+        <el-table-column prop="heartbeat_at" label="heartbeat_at" min-width="180" />
         <el-table-column prop="finished_at" label="finished_at" min-width="180" />
+        <el-table-column prop="timeout_seconds" label="timeout" width="100" />
+        <el-table-column label="cancel" width="96">
+          <template #default="{ row }">
+            <el-tag :type="row.cancel_requested ? 'warning' : 'info'" effect="plain">
+              {{ row.cancel_requested ? 'yes' : 'no' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="output_files" min-width="220">
           <template #default="{ row }">
             <div class="output-files">
@@ -109,11 +211,19 @@ onMounted(loadRuns)
   gap: 20px;
 }
 
-.page-heading {
+.page-heading,
+.heading-actions {
   display: flex;
+  gap: 20px;
+}
+
+.page-heading {
   align-items: flex-end;
   justify-content: space-between;
-  gap: 20px;
+}
+
+.heading-actions {
+  align-items: center;
 }
 
 .eyebrow {
@@ -140,6 +250,22 @@ h1 {
 
 .table-card {
   border-radius: 8px;
+}
+
+.run-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.run-filters .el-select {
+  width: 180px;
+}
+
+.warning-tag {
+  margin-left: 6px;
 }
 
 .run-detail {

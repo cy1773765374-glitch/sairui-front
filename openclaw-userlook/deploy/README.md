@@ -75,6 +75,10 @@ nano .env
 - `OPENCLAW_GATEWAY_TOKEN`
 - `OPENCLAW_GATEWAY_PASSWORD`
 - `MOCK_OPENCLAW=false`
+- `TASK_CHAT_TIMEOUT_SECONDS=120`
+- `TASK_JOB_TIMEOUT_SECONDS=1800`
+- `TASK_STALE_RUNNING_MINUTES=30`
+- `TASK_WATCHDOG_INTERVAL_SECONDS=60`
 - `USER_UPLOAD_ROOT=/data/openclaw-userlook/uploads`
 - `USER_OUTPUT_ROOT=/data/openclaw-userlook/outputs`
 - `MAX_UPLOAD_MB=100`
@@ -95,6 +99,13 @@ CREATE DATABASE openclaw_userlook CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_
 ```bash
 cd /opt/openclaw-userlook/backend
 .venv/bin/python -m app.init_db
+```
+
+从 Phase 10 升级到 Phase 11 的已有数据库，还需要执行幂等迁移脚本补齐任务生命周期字段和 `messages.run_id`：
+
+```bash
+cd /opt/openclaw-userlook/backend
+.venv/bin/python -m app.migrations.phase11_task_run_lifecycle
 ```
 
 ## 5. 创建默认 admin
@@ -198,7 +209,7 @@ sudo systemctl status openclaw-userlook-backend.service
 - `Restart=always`。
 - 日志写入 `backend/logs/`。
 
-`openclaw-userlook-worker.service.example` 只是占位模板，因为第十阶段不实现 Redis、Celery 或独立 worker。除非替换为真实命令，否则不要启用该服务。
+`openclaw-userlook-worker.service.example` 只是占位模板。Phase 11 仍不启用 Redis、Celery 或独立 worker，任务执行、per-agent 进程内锁和 watchdog 由 FastAPI lifespan 内置后台任务承载。生产环境应保持后端服务为单个 worker 进程；多进程或多实例队列协调留到后续阶段。除非替换为真实命令，否则不要启用该服务。
 
 ## 9. 检查 OpenClaw Gateway 是否运行
 

@@ -1,10 +1,12 @@
 import { apiClient, TOKEN_STORAGE_KEY } from './client'
+import type { TaskRun } from './runs'
 
 export type MessageRole = 'user' | 'assistant' | 'system'
 
 export interface Message {
   id: number
   conversation_id: number
+  run_id: number | null
   role: MessageRole
   content: string
   raw_payload: Record<string, unknown> | null
@@ -25,6 +27,7 @@ export interface Conversation {
 
 export interface ConversationDetail extends Conversation {
   messages: Message[]
+  active_run: TaskRun | null
 }
 
 export interface CreateConversationPayload {
@@ -32,9 +35,10 @@ export interface CreateConversationPayload {
   title: string
 }
 
-export type LocalMessage = Omit<Message, 'id' | 'conversation_id' | 'raw_payload'> & {
+export type LocalMessage = Omit<Message, 'id' | 'conversation_id' | 'raw_payload' | 'run_id'> & {
   id: number | string
   conversation_id?: number
+  run_id?: number | null
   raw_payload?: Record<string, unknown> | null
   streaming?: boolean
 }

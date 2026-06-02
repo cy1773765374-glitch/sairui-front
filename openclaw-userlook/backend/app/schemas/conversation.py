@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.schemas.run import TaskRunRead
 from app.schemas.message import MessageRead
 
 
@@ -24,3 +25,4 @@ class ConversationRead(BaseModel):
 
 class ConversationDetail(ConversationRead):
     messages: list[MessageRead]
+    active_run: TaskRunRead | None = None

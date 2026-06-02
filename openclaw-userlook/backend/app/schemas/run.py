@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -15,11 +16,18 @@ class TaskRunRead(BaseModel):
     conversation_id: int | None
     status: TaskRunStatus
     input_text: str
+    run_type: str
+    priority: int
     output_text: str | None
     output_dir: str | None
+    output_files_json: Any | None = None
     error_message: str | None
+    queued_at: datetime | None
     started_at: datetime | None
     finished_at: datetime | None
+    heartbeat_at: datetime | None
+    cancel_requested: bool
+    timeout_seconds: int | None
     created_at: datetime
     updated_at: datetime
     output_files: list[FileRead] = []

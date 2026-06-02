@@ -25,7 +25,7 @@ GATEWAY_UNAVAILABLE_MESSAGE = "OpenClaw Gateway 连接失败，请检查 opencla
 GATEWAY_HANDSHAKE_FAILED_MESSAGE = "OpenClaw Gateway 握手失败，请检查 Gateway 协议、Token 或权限配置"
 
 GatewayEventType = Literal["delta", "done", "error", "run_status"]
-GatewayRunStatus = Literal["pending", "running", "success", "failed", "cancelled"]
+GatewayRunStatus = Literal["pending", "queued", "running", "success", "failed", "cancelled", "timeout"]
 
 PENDING_STATES = {"queued", "queueing", "pending", "created", "received", "waiting"}
 RUNNING_STATES = {
@@ -48,7 +48,8 @@ SUCCESS_STATES = {
     "success",
     "succeeded",
 }
-FAILED_STATES = {"error", "failed", "failure", "exception", "timeout"}
+FAILED_STATES = {"error", "failed", "failure", "exception"}
+TIMEOUT_STATES = {"timeout", "timed_out", "deadline_exceeded"}
 CANCELLED_STATES = {"cancelled", "canceled", "cancel", "aborted", "abort"}
 DELTA_EVENTS = {
     "delta",
@@ -522,6 +523,20 @@ class OpenClawGatewayClient:
                     normalized_status = self._normalize_state_token(status)
                     if normalized_status in PENDING_STATES | RUNNING_STATES:
                         return OpenClawGatewayEvent(type="delta", content=text, raw=payload)
+                    if normalized_status in TIMEOUT_STATES:
+                        return OpenClawGatewayEvent(
+                            type="error",
+                            content=text,
+                            status="timeout",
+                            raw=payload,
+                        )
+                    if normalized_status in FAILED_STATES:
+                        return OpenClawGatewayEvent(
+                            type="error",
+                            content=text,
+                            status="failed",
+                            raw=payload,
+                        )
                     return OpenClawGatewayEvent(
                         type="done",
                         content=text,
@@ -548,6 +563,14 @@ class OpenClawGatewayClient:
         normalized_state = status_value or event_type
 
         event_kind = self._classify_event_type(normalized_state)
+
+        if normalized_state in TIMEOUT_STATES or event_kind == "timeout":
+            return OpenClawGatewayEvent(
+                type="error",
+                content=self._extract_error_message(payload),
+                status="timeout",
+                raw=payload,
+            )
 
         if normalized_state in FAILED_STATES or event_kind == "error":
             return OpenClawGatewayEvent(
@@ -623,9 +646,11 @@ class OpenClawGatewayClient:
     def _classify_event_type(
         self,
         value: str,
-    ) -> Literal["delta", "done", "error", "cancelled", "run_status", "unknown"]:
+    ) -> Literal["delta", "done", "error", "cancelled", "timeout", "run_status", "unknown"]:
         token = self._normalize_state_token(value)
         parts = set(token.replace(".", "_").replace(":", "_").split("_"))
+        if token in TIMEOUT_STATES or parts & {"timeout", "timed", "deadline"}:
+            return "timeout"
         if token in FAILED_STATES or parts & {"error", "failed", "failure", "exception"}:
             return "error"
         if token in CANCELLED_STATES or parts & {"cancelled", "canceled", "abort", "aborted"}:
@@ -641,9 +666,11 @@ class OpenClawGatewayClient:
     def _normalize_run_status(self, value: str) -> GatewayRunStatus:
         normalized = self._normalize_state_token(value)
         if normalized in PENDING_STATES:
-            return "pending"
+            return "queued"
         if normalized in SUCCESS_STATES:
             return "success"
+        if normalized in TIMEOUT_STATES:
+            return "timeout"
         if normalized in FAILED_STATES:
             return "failed"
         if normalized in CANCELLED_STATES:

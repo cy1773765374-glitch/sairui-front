@@ -22,6 +22,13 @@ class Settings(BaseSettings):
         default=300,
         alias="OPENCLAW_GATEWAY_TIMEOUT_SECONDS",
     )
+    task_chat_timeout_seconds: int = Field(default=120, alias="TASK_CHAT_TIMEOUT_SECONDS")
+    task_job_timeout_seconds: int = Field(default=1800, alias="TASK_JOB_TIMEOUT_SECONDS")
+    task_stale_running_minutes: int = Field(default=30, alias="TASK_STALE_RUNNING_MINUTES")
+    task_watchdog_interval_seconds: int = Field(default=60, alias="TASK_WATCHDOG_INTERVAL_SECONDS")
+    task_agent_concurrency: int = Field(default=1, alias="TASK_AGENT_CONCURRENCY")
+    task_global_chat_concurrency: int = Field(default=3, alias="TASK_GLOBAL_CHAT_CONCURRENCY")
+    task_global_job_concurrency: int = Field(default=1, alias="TASK_GLOBAL_JOB_CONCURRENCY")
     mock_openclaw: bool = Field(default=True, alias="MOCK_OPENCLAW")
     database_url: str = Field(
         default="mysql+pymysql://user:password@127.0.0.1:3306/openclaw_userlook?charset=utf8mb4",

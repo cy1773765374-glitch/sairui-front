@@ -15,7 +15,7 @@ import {
   type LocalMessage,
 } from '../api/conversations'
 import { downloadFile, formatFileSize, type UserFile } from '../api/files'
-import type { TaskRunStatus } from '../api/runs'
+import { cancelRun, fetchRun, isActiveRunStatus, type TaskRun, type TaskRunStatus } from '../api/runs'
 import ChatWindow from '../components/ChatWindow.vue'
 
 type ServerWsMessage =
@@ -88,6 +88,17 @@ function normalizeMessages(serverMessages: Awaited<ReturnType<typeof fetchConver
   messages.value = serverMessages.map((message) => ({ ...message, streaming: false }))
 }
 
+function applyRunState(run: TaskRun | null) {
+  currentRunId.value = run?.id ?? null
+  currentRunStatus.value = run?.status ?? ''
+  currentRunStatusMessage.value = run?.error_message ?? ''
+  outputFiles.value = run?.output_files ?? []
+  sending.value = isActiveRunStatus(run?.status)
+  if (!sending.value) {
+    activeAssistantMessageId.value = null
+  }
+}
+
 function resetConversationRuntimeState() {
   sending.value = false
   activeAssistantMessageId.value = null
@@ -130,6 +141,12 @@ async function loadHistory(
   }
   conversation.value = detail
   normalizeMessages(detail.messages)
+  if (detail.active_run) {
+    applyRunState(detail.active_run)
+  } else {
+    sending.value = false
+    activeAssistantMessageId.value = null
+  }
   return detail
 }
 
@@ -173,6 +190,30 @@ function scheduleReconnect(conversationId: number) {
   }, 1500)
 }
 
+async function reconcileCurrentRun(conversationId: number) {
+  if (!currentRunId.value) {
+    sending.value = false
+    activeAssistantMessageId.value = null
+    return
+  }
+  try {
+    const run = await fetchRun(currentRunId.value)
+    if (conversation.value?.id !== conversationId) {
+      return
+    }
+    applyRunState(run)
+    if (isActiveRunStatus(run.status)) {
+      currentRunStatusMessage.value = '连接断开，任务仍在后台运行'
+      return
+    }
+    await loadHistory(conversationId, activeInitializeRequestId)
+  } catch {
+    if (conversation.value?.id === conversationId) {
+      currentRunStatusMessage.value = '无法确认任务状态'
+    }
+  }
+}
+
 function connectWebSocket(conversationId: number, isReconnect = false) {
   clearReconnectTimer()
   if (!isReconnect) {
@@ -208,7 +249,7 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       return
     }
     connected.value = false
-    sending.value = false
+    void reconcileCurrentRun(conversationId)
     scheduleReconnect(conversationId)
   }
 
@@ -217,7 +258,7 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       return
     }
     connected.value = false
-    sending.value = false
+    void reconcileCurrentRun(conversationId)
     ElMessage.error('WebSocket 连接异常')
   }
 
@@ -242,6 +283,7 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
         activeAssistantMessageId.value = `assistant-${Date.now()}`
         messages.value.push({
           id: activeAssistantMessageId.value,
+          run_id: currentRunId.value,
           role: 'assistant',
           content: '',
           created_at: new Date().toISOString(),
@@ -267,13 +309,21 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       if (payload.output_files) {
         outputFiles.value = payload.output_files
       }
-      sending.value = !['success', 'failed', 'cancelled', 'done', 'idle'].includes(payload.status)
-      if (['failed', 'cancelled', 'idle'].includes(payload.status)) {
+      sending.value = isActiveRunStatus(currentRunStatus.value)
+      if (!sending.value) {
         const target = messages.value.find((message) => message.id === activeAssistantMessageId.value)
         if (target) {
           target.streaming = false
         }
         activeAssistantMessageId.value = null
+        if (conversation.value?.id === conversationId) {
+          const requestId = activeInitializeRequestId
+          await loadHistory(conversationId, requestId)
+          if (!isCurrentSocket(nextSocket, conversationId)) {
+            return
+          }
+          conversations.value = await fetchConversations()
+        }
       }
       return
     }
@@ -314,7 +364,11 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       target.streaming = false
     }
     activeAssistantMessageId.value = null
-    sending.value = false
+    if (currentRunId.value) {
+      void reconcileCurrentRun(conversationId)
+    } else {
+      sending.value = false
+    }
   }
 }
 
@@ -411,7 +465,7 @@ async function selectAgent(nextAgent: Agent) {
 function isConversationDeleteBlocked(nextConversation: Conversation) {
   return (
     nextConversation.id === conversation.value?.id &&
-    (sending.value || currentRunStatus.value === 'pending' || currentRunStatus.value === 'running')
+    (sending.value || isActiveRunStatus(currentRunStatus.value))
   )
 }
 
@@ -551,6 +605,7 @@ async function sendMessage(content: string, fileIds: number[]) {
   messages.value.push({
     id: `user-${Date.now()}`,
     conversation_id: conversation.value.id,
+    run_id: null,
     role: 'user',
     content,
     created_at: new Date().toISOString(),
@@ -573,28 +628,42 @@ async function sendMessage(content: string, fileIds: number[]) {
   }
 }
 
-function stopCurrentRun() {
-  if (
-    !socket ||
-    socket.readyState !== WebSocket.OPEN ||
-    !currentRunId.value ||
-    !conversation.value ||
-    socketConversationId !== conversation.value.id
-  ) {
+async function stopCurrentRun() {
+  if (!currentRunId.value || !conversation.value) {
     return
   }
-  socket.send(
-    JSON.stringify({
-      type: 'cancel_run',
-      run_id: currentRunId.value,
-    }),
-  )
-  sending.value = false
-  currentRunStatus.value = 'cancelled'
-  currentRunStatusMessage.value = '正在停止当前回复'
-  const target = messages.value.find((message) => message.id === activeAssistantMessageId.value)
-  if (target) {
-    target.streaming = false
+  const runId = currentRunId.value
+  const conversationId = conversation.value.id
+  try {
+    const run = await cancelRun(runId)
+    if (
+      socket &&
+      socket.readyState === WebSocket.OPEN &&
+      socketConversationId === conversationId
+    ) {
+      socket.send(
+        JSON.stringify({
+          type: 'cancel_run',
+          run_id: runId,
+        }),
+      )
+    }
+    if (conversation.value?.id !== conversationId) {
+      return
+    }
+    applyRunState(run)
+    if (!isActiveRunStatus(run.status)) {
+      const target = messages.value.find((message) => message.id === activeAssistantMessageId.value)
+      if (target) {
+        target.streaming = false
+      }
+      activeAssistantMessageId.value = null
+      await loadHistory(conversationId, activeInitializeRequestId)
+    } else {
+      currentRunStatusMessage.value = '正在停止当前回复'
+    }
+  } catch {
+    ElMessage.error('停止任务失败')
   }
 }
 
