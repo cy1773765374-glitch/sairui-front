@@ -153,7 +153,6 @@ class OpenClawGatewayClient:
             raise OpenClawGatewayConnectionError(GATEWAY_HANDSHAKE_FAILED_MESSAGE)
 
         request_id = f"connect-{uuid4().hex}"
-        nonce = challenge.get("payload", {}).get("nonce") if isinstance(challenge.get("payload"), dict) else None
         connect_payload = {
             "type": "req",
             "id": request_id,
@@ -177,9 +176,6 @@ class OpenClawGatewayClient:
                 "userAgent": "openclaw-userlook-backend",
             },
         }
-        if isinstance(nonce, str) and nonce:
-            connect_payload["params"]["challenge"] = {"nonce": nonce}
-
         await gateway_ws.send(json.dumps(connect_payload, ensure_ascii=False))
 
         while True:
