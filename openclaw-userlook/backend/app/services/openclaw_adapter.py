@@ -47,6 +47,8 @@ class OpenClawAdapter:
         conversation: Conversation,
         content: str,
         file_ids: list[int],
+        files: list[dict[str, object]] | None = None,
+        run_id: int | None = None,
         output_dir: str | None = None,
     ) -> AsyncIterator[OpenClawAdapterEvent]:
         if self.settings.mock_openclaw:
@@ -61,6 +63,8 @@ class OpenClawAdapter:
                 conversation=conversation,
                 content=content,
                 file_ids=file_ids,
+                files=files,
+                run_id=run_id,
                 output_dir=output_dir,
             ):
                 yield OpenClawAdapterEvent(

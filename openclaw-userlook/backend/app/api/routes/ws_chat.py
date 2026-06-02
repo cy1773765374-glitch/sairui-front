@@ -15,7 +15,11 @@ from app.schemas.message import WebSocketUserMessage
 from app.services.agent_service import user_can_access_agent
 from app.services.auth_service import get_user_by_id
 from app.services.conversation_service import require_conversation_for_user, save_message
-from app.services.file_service import register_output_files, validate_user_upload_file_ids
+from app.services.file_service import (
+    list_gateway_upload_files,
+    register_output_files,
+    validate_user_upload_file_ids,
+)
 from app.services.openclaw_adapter import OpenClawAdapter
 from app.services.run_service import (
     create_task_run,
@@ -119,6 +123,11 @@ async def chat_websocket(
 
                 try:
                     validate_user_upload_file_ids(db, current_user, inbound_message.file_ids)
+                    gateway_files = list_gateway_upload_files(
+                        db,
+                        current_user,
+                        inbound_message.file_ids,
+                    )
                 except HTTPException:
                     await connection_manager.send_json(
                         websocket,
@@ -169,6 +178,8 @@ async def chat_websocket(
                     conversation=conversation,
                     content=inbound_message.content,
                     file_ids=inbound_message.file_ids,
+                    files=gateway_files,
+                    run_id=task_run.id,
                     output_dir=task_run.output_dir,
                 ):
                     if event.type == "delta":
@@ -217,6 +228,7 @@ async def chat_websocket(
                         active_task_run = None
                         break
 
+                    final_output_dir = event.output_dir or task_run.output_dir
                     assistant_message = save_message(
                         db,
                         conversation,
@@ -228,7 +240,7 @@ async def chat_websocket(
                         db,
                         task_run,
                         output_text=assistant_content,
-                        output_dir=task_run.output_dir,
+                        output_dir=final_output_dir,
                     )
                     output_files = register_output_files(db, current_user.id, task_run.output_dir)
                     output_files_payload = jsonable_encoder(output_files)
