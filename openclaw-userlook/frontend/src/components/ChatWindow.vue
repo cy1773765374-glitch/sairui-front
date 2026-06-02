@@ -26,6 +26,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   send: [content: string, fileIds: number[]]
+  stop: []
   fileUploaded: [file: UserFile]
   removeFile: [fileId: number]
 }>()
@@ -34,6 +35,7 @@ const draft = ref('')
 const scrollRef = ref<HTMLElement | null>(null)
 
 const canSend = computed(() => props.connected && !props.sending && draft.value.trim().length > 0)
+const canStop = computed(() => props.connected && ['pending', 'running'].includes(props.runStatus))
 
 function send() {
   const content = draft.value.trim()
@@ -131,8 +133,8 @@ watch(
         @keydown.enter.exact.prevent="send"
       />
       <div class="composer-actions">
-        <el-tooltip content="当前阶段仅显示停止按钮，不执行取消">
-          <el-button :icon="VideoPause" :disabled="true">停止</el-button>
+        <el-tooltip content="停止当前回复">
+          <el-button :icon="VideoPause" :disabled="!canStop" @click="emit('stop')">停止</el-button>
         </el-tooltip>
         <el-button
           class="send-button"
@@ -153,8 +155,8 @@ watch(
 .chat-window {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
-  height: calc(100vh - 120px);
-  min-height: 620px;
+  height: 100%;
+  min-height: 0;
   border: 1px solid #dfe5ee;
   border-radius: 8px;
   background: #f8fafc;
@@ -245,8 +247,7 @@ p {
 
 @media (max-width: 760px) {
   .chat-window {
-    height: auto;
-    min-height: 640px;
+    min-height: calc(100vh - 220px);
   }
 
   .chat-header,

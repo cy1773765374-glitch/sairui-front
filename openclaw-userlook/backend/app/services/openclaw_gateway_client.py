@@ -500,6 +500,13 @@ class OpenClawGatewayClient:
                     raw=payload,
                 )
             result_payload = payload.get("payload")
+            if isinstance(result_payload, str):
+                return OpenClawGatewayEvent(
+                    type="done",
+                    content=result_payload,
+                    status="success",
+                    raw=payload,
+                )
             if isinstance(result_payload, dict):
                 if self._is_terminal_response(result_payload):
                     return OpenClawGatewayEvent(
@@ -512,7 +519,16 @@ class OpenClawGatewayClient:
                 text = self._extract_text(result_payload)
                 status = self._extract_status(result_payload)
                 if text:
-                    return OpenClawGatewayEvent(type="delta", content=text, raw=payload)
+                    normalized_status = self._normalize_state_token(status)
+                    if normalized_status in PENDING_STATES | RUNNING_STATES:
+                        return OpenClawGatewayEvent(type="delta", content=text, raw=payload)
+                    return OpenClawGatewayEvent(
+                        type="done",
+                        content=text,
+                        status="success",
+                        output_dir=self._extract_output_dir(result_payload),
+                        raw=payload,
+                    )
                 return OpenClawGatewayEvent(
                     type="run_status",
                     status=self._normalize_run_status(status or "running"),
