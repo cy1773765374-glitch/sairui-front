@@ -100,7 +100,7 @@ Expected response when MySQL is reachable:
 
 Authentication endpoints:
 
-- `POST /api/auth/register` creates a `pending` user.
+- `POST /api/auth/register` creates a `pending` normal user that requires admin approval before login.
 - `POST /api/auth/login` returns a JWT only for `active` users.
 - `GET /api/auth/me` returns the current JWT user.
 - `GET /api/wecom/login-url` returns a WeCom OAuth URL. With `WECOM_MOCK_LOGIN=true`, it returns a mock callback URL.
@@ -132,6 +132,7 @@ Chat WebSocket:
 - With `MOCK_OPENCLAW=true`, FastAPI returns the Phase 05 mock streaming reply.
 - With `MOCK_OPENCLAW=false`, FastAPI calls OpenClaw Gateway through `OpenClawAdapter` and `OpenClawGatewayClient`.
 - Gateway address, token, and protocol details stay in the backend and are never returned to the browser.
+- Gateway completion events such as `done`, `assistant_done`, or `success` may carry final text in `content`, `answer`, `message`, or nested `data`; FastAPI forwards that text to the browser before saving the assistant message.
 - Each user Agent call records an `audit_logs` row with `action=agent.invoke`.
 - If Gateway cannot be reached, the browser receives: `OpenClaw Gateway 连接失败，请检查 openclaw-gateway.service 是否运行`.
 
@@ -153,7 +154,8 @@ Phase 07 files and runs:
 Phase 08 frontend workspace:
 
 - Dashboard shows backend health, current user, available Agent count, recent TaskRun records, and recent conversations.
-- Agent marketplace supports keyword search, category filtering, risk tags, and file/image capability tags.
+- Normal-user Agent marketplace shows authorized Agent names only; clicking an Agent name card opens chat.
+- Admin users can still inspect Agent details and access Agent management.
 - Chat workspace uses a three-column layout: available Agents and conversation history on the left, streaming chat and file upload in the center, and Agent/task/output details on the right.
 - High-risk Agents require a confirmation dialog before first entering chat in the current page session.
 - WebSocket disconnects show Element Plus notifications and retry the conversation channel up to three times.
@@ -163,10 +165,10 @@ Phase 08 frontend workspace:
 Phase 09 WeCom H5 foundation:
 
 - `src/utils/env.ts` detects the WeCom WebView by user agent.
-- Visiting protected pages inside WeCom without a token routes to `/wecom/login`, which fetches `/api/wecom/login-url` and redirects to the returned authorization URL.
+- WeCom backend endpoints are retained as a foundation, but the frontend login page does not expose WeCom login yet.
+- Visiting protected pages without a token routes to `/login` for web username/password login.
 - `/wecom/callback` exchanges `code` and `state` through FastAPI and stores the returned system JWT. The frontend never reads or stores `WECOM_SECRET`.
-- Normal browsers can keep using username/password login. The login page also exposes a WeCom login entry for development mock testing.
-- Dashboard shows the current login source as `password` or `wecom`.
+- Dashboard shows the current login source; web login uses `password`.
 
 Phase 10 production deployment templates:
 
@@ -184,7 +186,7 @@ copy .env.example .env
 npm run dev -- --host 127.0.0.1 --port 10010
 ```
 
-Open `http://127.0.0.1:10010`, log in with the default admin, register a normal user, approve that user from the admin user page, grant Agent permissions from the Agent management page, then confirm the approved user only sees authorized Agents and no admin menu. Use the Agent marketplace filters to choose an Agent, enter the chat workspace, upload a supported file before sending if needed, and verify mock streaming replies. The Dashboard links into recent conversations, Task Center, and File Center.
+Open `http://127.0.0.1:10010`, register a normal user, approve that user from the admin user page, grant Agent permissions from the admin Agent management page if needed, then confirm the approved user only sees authorized enabled Agent name cards and no admin menu. Click an Agent name card to enter the chat workspace, upload a supported file before sending if needed, and verify streaming replies. The Dashboard links into recent conversations, Task Center, and File Center.
 
 ## Environment
 

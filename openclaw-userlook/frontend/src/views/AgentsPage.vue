@@ -6,6 +6,7 @@ import { ElMessage } from 'element-plus'
 
 import { fetchAgents, type Agent } from '../api/agents'
 import AgentCard from '../components/AgentCard.vue'
+import AgentDetailCard from '../components/AgentDetailCard.vue'
 import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
@@ -23,6 +24,10 @@ const categories = computed(() => {
 const filteredAgents = computed(() => {
   const text = keyword.value.trim().toLowerCase()
   return agents.value.filter((agent) => {
+    if (!authStore.isAdmin) {
+      return !text || agent.name.toLowerCase().includes(text)
+    }
+
     const agentCategory = agent.category || '未分类'
     const matchesCategory = category.value === 'all' || agentCategory === category.value
     const matchesKeyword =
@@ -58,7 +63,8 @@ onMounted(loadAgents)
       <div>
         <p class="eyebrow">Agents</p>
         <h1>Agent 广场</h1>
-        <p>选择已授权 Agent，按业务类别、关键词和能力快速定位。</p>
+        <p v-if="authStore.isAdmin">选择已授权 Agent，按业务类别、关键词和能力快速定位。</p>
+        <p v-else>选择已授权 Agent，点击名称即可进入对话。</p>
       </div>
       <div class="heading-actions">
         <el-button v-if="authStore.isAdmin" @click="router.push({ name: 'admin-agents' })">
@@ -74,9 +80,9 @@ onMounted(loadAgents)
           v-model="keyword"
           :prefix-icon="Search"
           clearable
-          placeholder="搜索 Agent 名称、编码、说明"
+          :placeholder="authStore.isAdmin ? '搜索 Agent 名称、编码、说明' : '搜索 Agent 名称'"
         />
-        <el-segmented v-model="category" :options="categories" />
+        <el-segmented v-if="authStore.isAdmin" v-model="category" :options="categories" />
       </div>
     </el-card>
 
@@ -85,13 +91,11 @@ onMounted(loadAgents)
       v-else-if="filteredAgents.length === 0"
       description="暂无符合条件的 Agent，请调整筛选条件或联系管理员授权。"
     />
-    <div v-else class="agent-grid">
-      <AgentCard
-        v-for="agent in filteredAgents"
-        :key="agent.code"
-        :agent="agent"
-        @open-chat="openChat"
-      />
+    <div v-else class="agent-grid" :class="{ 'agent-grid--simple': !authStore.isAdmin }">
+      <template v-for="agent in filteredAgents" :key="agent.code">
+        <AgentDetailCard v-if="authStore.isAdmin" :agent="agent" @open-chat="openChat" />
+        <AgentCard v-else :agent="agent" @open-chat="openChat" />
+      </template>
     </div>
   </section>
 </template>
@@ -152,6 +156,10 @@ h1 {
   gap: 16px;
 }
 
+.agent-grid--simple {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 320px));
+}
+
 @media (max-width: 760px) {
   .page-heading,
   .filter-row {
@@ -167,6 +175,10 @@ h1 {
   .filter-row :deep(.el-segmented) {
     max-width: 100%;
     overflow-x: auto;
+  }
+
+  .agent-grid--simple {
+    grid-template-columns: 1fr;
   }
 }
 </style>

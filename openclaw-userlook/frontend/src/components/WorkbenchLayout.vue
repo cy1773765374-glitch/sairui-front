@@ -43,7 +43,6 @@ function logout() {
         <div class="brand-mark">O</div>
         <div class="brand-copy">
           <strong>{{ appStore.systemName }}</strong>
-          <span>{{ appStore.phase }}</span>
         </div>
       </div>
 
