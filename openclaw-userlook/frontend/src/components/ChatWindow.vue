@@ -247,7 +247,8 @@ p {
 
 @media (max-width: 760px) {
   .chat-window {
-    min-height: calc(100vh - 220px);
+    height: 100%;
+    min-height: 0;
   }
 
   .chat-header,

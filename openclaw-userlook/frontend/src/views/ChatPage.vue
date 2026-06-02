@@ -50,10 +50,12 @@ const currentRunStatus = ref<TaskRunStatus | ''>('')
 const currentRunStatusMessage = ref('')
 
 let socket: WebSocket | null = null
+let socketConversationId: number | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectAttempts = 0
 let unmounted = false
 let suppressRouteWatch = false
+let activeInitializeRequestId = 0
 
 const title = computed(() => conversation.value?.title ?? agent.value?.name ?? 'Agent 对话')
 const subtitle = computed(() => {
@@ -99,16 +101,34 @@ function parseConversationId(value: unknown) {
   return Number.isInteger(numericValue) && numericValue > 0 ? numericValue : undefined
 }
 
-async function refreshSidebarData() {
+async function refreshSidebarData(requestId = activeInitializeRequestId) {
   const [agentResult, conversationResult] = await Promise.all([fetchAgents(), fetchConversations()])
+  if (!isActiveInitializeRequest(requestId)) {
+    return
+  }
   agents.value = agentResult
   conversations.value = conversationResult
 }
 
-async function loadHistory(conversationId: number) {
+function isActiveInitializeRequest(requestId: number) {
+  return !unmounted && requestId === activeInitializeRequestId
+}
+
+async function loadHistory(
+  conversationId: number,
+  requestId = activeInitializeRequestId,
+  expectedAgentId?: number,
+) {
   const detail = await fetchConversation(conversationId)
+  if (!isActiveInitializeRequest(requestId)) {
+    return null
+  }
+  if (expectedAgentId !== undefined && detail.agent_id !== expectedAgentId) {
+    return null
+  }
   conversation.value = detail
   normalizeMessages(detail.messages)
+  return detail
 }
 
 function clearReconnectTimer() {
@@ -118,8 +138,17 @@ function clearReconnectTimer() {
   }
 }
 
-function scheduleReconnect() {
-  if (!conversation.value || unmounted) {
+function isCurrentSocket(currentSocket: WebSocket, conversationId: number) {
+  return (
+    !unmounted &&
+    socket === currentSocket &&
+    socketConversationId === conversationId &&
+    conversation.value?.id === conversationId
+  )
+}
+
+function scheduleReconnect(conversationId: number) {
+  if (conversation.value?.id !== conversationId || unmounted) {
     return
   }
   if (reconnectAttempts >= 3) {
@@ -135,8 +164,11 @@ function scheduleReconnect() {
     title: 'WebSocket 已断开',
     message: `正在尝试第 ${reconnectAttempts} 次重连。`,
   })
-  const conversationId = conversation.value.id
-  reconnectTimer = setTimeout(() => connectWebSocket(conversationId, true), 1500)
+  reconnectTimer = setTimeout(() => {
+    if (conversation.value?.id === conversationId && socketConversationId === conversationId) {
+      connectWebSocket(conversationId, true)
+    }
+  }, 1500)
 }
 
 function connectWebSocket(conversationId: number, isReconnect = false) {
@@ -150,9 +182,14 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
     socket.close()
   }
 
-  socket = new WebSocket(buildConversationWebSocketUrl(conversationId))
+  const nextSocket = new WebSocket(buildConversationWebSocketUrl(conversationId))
+  socket = nextSocket
+  socketConversationId = conversationId
 
-  socket.onopen = () => {
+  nextSocket.onopen = () => {
+    if (!isCurrentSocket(nextSocket, conversationId)) {
+      return
+    }
     connected.value = true
     errorMessage.value = ''
     if (isReconnect) {
@@ -164,19 +201,28 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
     reconnectAttempts = 0
   }
 
-  socket.onclose = () => {
+  nextSocket.onclose = () => {
+    if (!isCurrentSocket(nextSocket, conversationId)) {
+      return
+    }
     connected.value = false
     sending.value = false
-    scheduleReconnect()
+    scheduleReconnect(conversationId)
   }
 
-  socket.onerror = () => {
+  nextSocket.onerror = () => {
+    if (!isCurrentSocket(nextSocket, conversationId)) {
+      return
+    }
     connected.value = false
     sending.value = false
     ElMessage.error('WebSocket 连接异常')
   }
 
-  socket.onmessage = async (event) => {
+  nextSocket.onmessage = async (event) => {
+    if (!isCurrentSocket(nextSocket, conversationId)) {
+      return
+    }
     let payload: ServerWsMessage
     try {
       payload = JSON.parse(event.data) as ServerWsMessage
@@ -186,6 +232,9 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
     }
 
     if (payload.type === 'assistant_delta') {
+      if (!isCurrentSocket(nextSocket, conversationId)) {
+        return
+      }
       errorMessage.value = ''
       if (!activeAssistantMessageId.value) {
         activeAssistantMessageId.value = `assistant-${Date.now()}`
@@ -206,6 +255,9 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
     }
 
     if (payload.type === 'run_status') {
+      if (!isCurrentSocket(nextSocket, conversationId)) {
+        return
+      }
       currentRunId.value = payload.run_id ?? currentRunId.value
       currentRunStatus.value =
         payload.status === 'done' ? 'success' : payload.status === 'idle' ? '' : payload.status
@@ -225,6 +277,9 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
     }
 
     if (payload.type === 'assistant_done') {
+      if (!isCurrentSocket(nextSocket, conversationId)) {
+        return
+      }
       currentRunId.value = payload.run_id ?? currentRunId.value
       if (payload.output_files) {
         outputFiles.value = payload.output_files
@@ -236,13 +291,20 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       }
       activeAssistantMessageId.value = null
       sending.value = false
-      if (conversation.value) {
-        await loadHistory(conversation.value.id)
+      if (conversation.value?.id === conversationId) {
+        const requestId = activeInitializeRequestId
+        await loadHistory(conversationId, requestId)
+        if (!isCurrentSocket(nextSocket, conversationId)) {
+          return
+        }
         conversations.value = await fetchConversations()
       }
       return
     }
 
+    if (!isCurrentSocket(nextSocket, conversationId)) {
+      return
+    }
     errorMessage.value = payload.message
     ElMessage.error(payload.message)
     const target = messages.value.find((message) => message.id === activeAssistantMessageId.value)
@@ -262,18 +324,25 @@ function closeActiveSocket() {
     socket.close()
     socket = null
   }
+  socketConversationId = null
   connected.value = false
 }
 
-async function ensureConversation(currentAgent: Agent, preferredConversationId?: number) {
+async function ensureConversation(
+  currentAgent: Agent,
+  requestId: number,
+  preferredConversationId?: number,
+) {
   if (preferredConversationId) {
-    await loadHistory(preferredConversationId)
-    return
+    const selected = await loadHistory(preferredConversationId, requestId, currentAgent.id)
+    if (selected) {
+      return
+    }
   }
 
   const existing = conversations.value.find((item) => item.agent_id === currentAgent.id)
   if (existing) {
-    await loadHistory(existing.id)
+    await loadHistory(existing.id, requestId, currentAgent.id)
     return
   }
 
@@ -281,31 +350,49 @@ async function ensureConversation(currentAgent: Agent, preferredConversationId?:
     agent_id: currentAgent.id,
     title: `${currentAgent.name} 对话`,
   })
+  if (!isActiveInitializeRequest(requestId)) {
+    return
+  }
   conversations.value = [created, ...conversations.value]
-  await loadHistory(created.id)
+  await loadHistory(created.id, requestId, currentAgent.id)
 }
 
 async function initializeAgent(agentCode: string, preferredConversationId?: number) {
+  const requestId = ++activeInitializeRequestId
+  closeActiveSocket()
   loading.value = true
   errorMessage.value = ''
   attachedFiles.value = []
   resetConversationRuntimeState()
+  conversation.value = null
+  messages.value = []
 
   try {
     if (agents.value.length === 0 || conversations.value.length === 0) {
-      await refreshSidebarData()
+      await refreshSidebarData(requestId)
+    }
+    if (!isActiveInitializeRequest(requestId)) {
+      return
     }
     const currentAgent = agents.value.find((item) => item.code === agentCode) ?? (await fetchAgent(agentCode))
+    if (!isActiveInitializeRequest(requestId)) {
+      return
+    }
     agent.value = currentAgent
-    await ensureConversation(currentAgent, preferredConversationId)
-    if (conversation.value) {
-      connectWebSocket(conversation.value.id)
+    await ensureConversation(currentAgent, requestId, preferredConversationId)
+    const initializedConversation = conversation.value as Conversation | null
+    if (isActiveInitializeRequest(requestId) && initializedConversation) {
+      connectWebSocket(initializedConversation.id)
     }
   } catch (error) {
-    ElMessage.error('对话初始化失败')
-    router.push({ name: 'agents' })
+    if (isActiveInitializeRequest(requestId)) {
+      ElMessage.error('对话初始化失败')
+      router.push({ name: 'agents' })
+    }
   } finally {
-    loading.value = false
+    if (isActiveInitializeRequest(requestId)) {
+      loading.value = false
+    }
   }
 }
 
@@ -369,7 +456,12 @@ async function selectConversation(nextConversation: Conversation) {
 }
 
 async function sendMessage(content: string, fileIds: number[]) {
-  if (!socket || socket.readyState !== WebSocket.OPEN || !conversation.value) {
+  if (
+    !socket ||
+    socket.readyState !== WebSocket.OPEN ||
+    !conversation.value ||
+    socketConversationId !== conversation.value.id
+  ) {
     ElMessage.error('WebSocket 未连接')
     return
   }
@@ -404,7 +496,13 @@ async function sendMessage(content: string, fileIds: number[]) {
 }
 
 function stopCurrentRun() {
-  if (!socket || socket.readyState !== WebSocket.OPEN || !currentRunId.value) {
+  if (
+    !socket ||
+    socket.readyState !== WebSocket.OPEN ||
+    !currentRunId.value ||
+    !conversation.value ||
+    socketConversationId !== conversation.value.id
+  ) {
     return
   }
   socket.send(

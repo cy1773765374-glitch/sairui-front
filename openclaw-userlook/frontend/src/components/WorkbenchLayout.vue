@@ -268,8 +268,10 @@ function logout() {
   }
 
   .workbench-content--chat {
-    min-height: calc(100vh - 132px);
+    height: calc(100dvh - 132px);
+    min-height: 0;
     padding: 12px;
+    overflow: hidden;
   }
 }
 </style>
