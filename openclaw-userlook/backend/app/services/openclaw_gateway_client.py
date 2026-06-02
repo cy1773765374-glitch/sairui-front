@@ -262,8 +262,6 @@ class OpenClawGatewayClient:
             "signature": self._sign_device_payload(identity.private_key_pem, payload),
             "signedAt": signed_at_ms,
             "nonce": nonce,
-            "platform": platform,
-            "deviceFamily": device_family,
         }
 
     def _load_or_create_device_identity(self) -> GatewayDeviceIdentity:
