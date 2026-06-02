@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus'
 
 import { fetchAgents, type Agent } from '../api/agents'
 import { downloadFile, formatFileSize } from '../api/files'
-import { fetchRuns, isActiveRunStatus, type TaskRun, type TaskRunStatus } from '../api/runs'
+import { fetchRuns, type TaskRun, type TaskRunStatus } from '../api/runs'
 
 const loading = ref(false)
 const runs = ref<TaskRun[]>([])
@@ -66,15 +66,24 @@ function statusType(status: TaskRun['status']) {
   return 'info'
 }
 
+function parseBackendTime(value: string | null | undefined) {
+  if (!value) {
+    return null
+  }
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value)
+  const timestamp = Date.parse(hasTimezone ? value : `${value}Z`)
+  return Number.isNaN(timestamp) ? null : timestamp
+}
+
 function isRunWarning(row: TaskRun) {
-  if (!isActiveRunStatus(row.status)) {
+  if (row.status !== 'running') {
     return false
   }
-  const heartbeat = row.heartbeat_at || row.updated_at
-  if (!heartbeat) {
+  const heartbeat = parseBackendTime(row.heartbeat_at || row.started_at)
+  if (heartbeat === null) {
     return false
   }
-  return Date.now() - new Date(heartbeat).getTime() > 5 * 60 * 1000
+  return Date.now() - heartbeat > 5 * 60 * 1000
 }
 
 function resetFilters() {

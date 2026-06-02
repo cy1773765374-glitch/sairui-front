@@ -64,12 +64,11 @@ def scan_stale_task_runs() -> int:
 
             if run.status == TaskRunStatus.queued:
                 queued_at = _as_aware(run.queued_at) or _as_aware(run.created_at)
-                timeout_seconds = (
-                    settings.task_job_timeout_seconds
-                    if run.run_type == "job"
-                    else settings.task_chat_timeout_seconds
-                )
-                if queued_at is not None and queued_at + timedelta(seconds=timeout_seconds) <= now:
+                if (
+                    settings.task_queue_timeout_seconds
+                    and queued_at is not None
+                    and queued_at + timedelta(seconds=settings.task_queue_timeout_seconds) <= now
+                ):
                     run.status = TaskRunStatus.timeout
                     run.error_message = "任务排队超过超时时间"
                     run.finished_at = now
