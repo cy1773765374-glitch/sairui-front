@@ -729,9 +729,12 @@ onBeforeUnmount(() => {
 .chat-page {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr) 300px;
+  grid-template-rows: minmax(0, 1fr);
   gap: 16px;
   align-items: stretch;
   height: 100%;
+  max-height: 100%;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -740,6 +743,7 @@ onBeforeUnmount(() => {
   display: grid;
   align-content: start;
   gap: 16px;
+  max-height: 100%;
   min-height: 0;
   overflow-y: auto;
 }
@@ -824,6 +828,9 @@ onBeforeUnmount(() => {
 
 .chat-main {
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+  max-height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -870,6 +877,10 @@ onBeforeUnmount(() => {
     grid-template-columns: 260px minmax(0, 1fr);
   }
 
+  .chat-main {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
   .details-panel {
     display: none;
   }
@@ -884,6 +895,7 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
     grid-template-rows: auto minmax(0, 1fr);
     height: 100%;
+    max-height: 100%;
   }
 
   .left-panel {
