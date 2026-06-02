@@ -1,4 +1,5 @@
 from collections import defaultdict
+import contextlib
 
 from fastapi import WebSocket
 
@@ -21,6 +22,12 @@ class WebSocketConnectionManager:
 
     async def send_json(self, websocket: WebSocket, payload: dict) -> None:
         await websocket.send_json(payload)
+
+    async def broadcast_json(self, conversation_id: int, payload: dict) -> None:
+        connections = list(self._connections.get(conversation_id, set()))
+        for websocket in connections:
+            with contextlib.suppress(Exception):
+                await websocket.send_json(payload)
 
 
 connection_manager = WebSocketConnectionManager()

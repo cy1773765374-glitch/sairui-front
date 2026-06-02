@@ -16,7 +16,7 @@ from app.services.openclaw_gateway_client import (
 )
 
 AdapterEventType = Literal["delta", "done", "error", "run_status"]
-AdapterRunStatus = Literal["pending", "running", "success", "failed", "cancelled"]
+AdapterRunStatus = Literal["pending", "queued", "running", "success", "failed", "cancelled", "timeout"]
 GATEWAY_AUTH_MISSING_MESSAGE = (
     "OpenClaw Gateway 认证未配置，请设置 OPENCLAW_GATEWAY_TOKEN 或 OPENCLAW_GATEWAY_PASSWORD"
 )

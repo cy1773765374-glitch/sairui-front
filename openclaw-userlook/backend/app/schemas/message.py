@@ -9,6 +9,7 @@ from app.models.message import MessageRole
 class MessageRead(BaseModel):
     id: int
     conversation_id: int
+    run_id: int | None = None
     role: MessageRole
     content: str
     raw_payload: dict[str, Any] | None

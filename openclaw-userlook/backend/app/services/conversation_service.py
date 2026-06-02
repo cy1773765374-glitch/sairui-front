@@ -12,6 +12,7 @@ from app.models.task_run import TaskRun
 from app.models.user import User, UserRole
 from app.schemas.conversation import ConversationCreate, ConversationDetail, ConversationRead
 from app.services.agent_service import user_can_access_agent
+from app.services.run_service import get_latest_active_run_for_conversation
 
 
 def _utc_now() -> datetime:
@@ -99,7 +100,12 @@ def get_conversation_detail(
             .order_by(Message.id.asc())
         )
     )
-    return ConversationDetail(**_to_read(conversation, agent).model_dump(), messages=messages)
+    active_run = get_latest_active_run_for_conversation(db, current_user, conversation.id)
+    return ConversationDetail(
+        **_to_read(conversation, agent).model_dump(),
+        messages=messages,
+        active_run=active_run,
+    )
 
 
 def delete_conversation(
@@ -137,9 +143,11 @@ def save_message(
     role: MessageRole,
     content: str,
     raw_payload: dict | None = None,
+    run_id: int | None = None,
 ) -> Message:
     message = Message(
         conversation_id=conversation.id,
+        run_id=run_id,
         role=role,
         content=content,
         raw_payload=raw_payload,

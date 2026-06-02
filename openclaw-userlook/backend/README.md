@@ -35,6 +35,14 @@ python -m app.init_db
 
 This also creates the default admin user when `DEFAULT_ADMIN_USERNAME` does not exist and seeds the preset Agents.
 
+For existing Phase 10 databases, run the Phase 11 idempotent migration after `app.init_db` or before restarting the upgraded service:
+
+```bash
+python -m app.migrations.phase11_task_run_lifecycle
+```
+
+The migration adds task lifecycle fields and `messages.run_id`, expands `task_runs.status`, and is safe to run repeatedly. It does not delete existing data.
+
 Preset Agents can also be initialized independently:
 
 ```bash
@@ -141,6 +149,13 @@ curl -X POST http://127.0.0.1:10009/api/admin/agents/main/permissions ^
 - `OPENCLAW_GATEWAY_TOKEN`
 - `OPENCLAW_GATEWAY_PASSWORD`
 - `OPENCLAW_GATEWAY_TIMEOUT_SECONDS`
+- `TASK_CHAT_TIMEOUT_SECONDS`
+- `TASK_JOB_TIMEOUT_SECONDS`
+- `TASK_STALE_RUNNING_MINUTES`
+- `TASK_WATCHDOG_INTERVAL_SECONDS`
+- `TASK_AGENT_CONCURRENCY`
+- `TASK_GLOBAL_CHAT_CONCURRENCY`
+- `TASK_GLOBAL_JOB_CONCURRENCY`
 - `MOCK_OPENCLAW`
 - `JWT_SECRET_KEY`
 - `JWT_ALGORITHM`
@@ -159,7 +174,11 @@ The browser only connects to:
 WS /api/ws/conversations/{conversation_id}?token={JWT}
 ```
 
-`ws_chat.py` validates uploaded `file_ids`, creates a `task_runs` row, saves the user message, records `audit_logs.action=agent.invoke`, then calls `OpenClawAdapter`. The adapter either streams the mock reply or delegates to `OpenClawGatewayClient`, which owns the Gateway URL, token header, request payload, and response parsing. Task status events include `run_id`, and completed runs scan `USER_OUTPUT_ROOT/{user_id}/{yyyyMMdd}/run_{run_id}` for supported output files.
+`ws_chat.py` validates uploaded `file_ids`, creates a queued `task_runs` row, saves the user message with `run_id`, records `audit_logs.action=agent.invoke`, then hands execution to the in-process task executor. The executor owns its own SQLAlchemy session, streams through `OpenClawAdapter`, persists the assistant message with `run_id`, and always moves the run to a terminal status. Task status events include `run_id`, and completed runs scan `USER_OUTPUT_ROOT/{user_id}/{yyyyMMdd}/run_{run_id}` for supported output files.
+
+Phase 11 uses in-process per-agent locks and FastAPI lifespan background tasks. Run one backend worker process per service instance; multi-process or multi-instance queue coordination requires a later distributed queue/lock design.
+
+The FastAPI lifespan watchdog scans old `running` and `queued` rows at startup and every `TASK_WATCHDOG_INTERVAL_SECONDS` seconds. Runs that exceed `timeout_seconds` become `timeout`; running runs with stale heartbeat become `stale`.
 
 Gateway failure is returned to the browser as:
 
@@ -174,6 +193,9 @@ OpenClaw Gateway 连接失败，请检查 openclaw-gateway.service 是否运行
 - `GET /api/files/{file_id}/download` checks ownership and verifies the stored path stays inside the configured upload/output root.
 - `GET /api/runs` lists TaskRun history.
 - `GET /api/runs/{run_id}` returns TaskRun detail and registered output files.
+- `POST /api/runs/{run_id}/cancel` requests cancellation.
+
+`GET /api/runs` supports filters: `agent_id`, `conversation_id`, `status`, `run_type`, and `active_only=true`.
 
 ## Verification
 

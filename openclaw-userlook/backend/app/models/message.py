@@ -27,6 +27,7 @@ class Message(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), index=True, nullable=False)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("task_runs.id"), index=True, nullable=True)
     role: Mapped[MessageRole] = mapped_column(
         SQLEnum(
             MessageRole,
