@@ -398,40 +398,25 @@ class OpenClawGatewayClient:
         run_id: int | None,
         output_dir: str | None,
     ) -> dict[str, Any]:
+        session_key = self._build_gateway_session_key(agent, conversation)
+        message = self._build_gateway_message(
+            content=content,
+            user=user,
+            conversation=conversation,
+            file_ids=file_ids,
+            run_id=run_id,
+            output_dir=output_dir,
+        )
         params: dict[str, Any] = {
-            "agentId": agent.openclaw_agent_id,
-            "sessionKey": conversation.session_key,
-            "message": content,
+            "sessionKey": session_key,
+            "message": message,
             "deliver": False,
             "timeoutMs": self.timeout_seconds * 1000,
             "idempotencyKey": f"openclaw-userlook:{run_id}" if run_id is not None else uuid4().hex,
-            "metadata": {
-                "source": "openclaw-userlook",
-                "user": {
-                    "id": user.id,
-                    "username": user.username,
-                    "display_name": user.display_name,
-                    "role": user.role.value,
-                },
-                "conversation": {
-                    "id": conversation.id,
-                    "title": conversation.title,
-                    "session_key": conversation.session_key,
-                },
-                "run": {
-                    "id": run_id,
-                    "output_dir": output_dir,
-                },
-                "file_ids": file_ids,
-            },
         }
         attachments = self._build_attachments(files)
         if attachments:
             params["attachments"] = attachments
-            params["files"] = files
-        if output_dir:
-            params["outputDir"] = output_dir
-            params["output_dir"] = output_dir
         payload = {
             "type": "req",
             "id": f"chat-{run_id or uuid4().hex}",
@@ -439,6 +424,42 @@ class OpenClawGatewayClient:
             "params": params,
         }
         return payload
+
+    def _build_gateway_session_key(self, agent: Agent, conversation: Conversation) -> str:
+        session_key = conversation.session_key.strip()
+        if session_key.startswith("agent:"):
+            return session_key
+        agent_id = agent.openclaw_agent_id.strip()
+        if not agent_id:
+            return session_key
+        return f"agent:{agent_id}:{session_key}"
+
+    def _build_gateway_message(
+        self,
+        *,
+        content: str,
+        user: User,
+        conversation: Conversation,
+        file_ids: list[int],
+        run_id: int | None,
+        output_dir: str | None,
+    ) -> str:
+        context_lines = [
+            "[openclaw-userlook context]",
+            f"user_id={user.id}",
+            f"username={user.username}",
+            f"conversation_id={conversation.id}",
+            f"conversation_title={conversation.title}",
+            f"source_session_key={conversation.session_key}",
+        ]
+        if run_id is not None:
+            context_lines.append(f"run_id={run_id}")
+        if file_ids:
+            context_lines.append(f"file_ids={','.join(str(file_id) for file_id in file_ids)}")
+        if output_dir:
+            context_lines.append(f"output_dir={output_dir}")
+        context_lines.append("[/openclaw-userlook context]")
+        return "\n".join(context_lines) + "\n\n" + content
 
     def _build_attachments(self, files: list[dict[str, Any]]) -> list[dict[str, Any]]:
         attachments: list[dict[str, Any]] = []
