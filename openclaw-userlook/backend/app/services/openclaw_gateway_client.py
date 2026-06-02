@@ -174,6 +174,7 @@ class OpenClawGatewayClient:
             "id": "gateway-client",
             "version": "openclaw-userlook",
             "platform": "linux",
+            "deviceFamily": "server",
             "mode": "backend",
         }
         role = "operator"
@@ -243,7 +244,7 @@ class OpenClawGatewayClient:
     ) -> dict[str, Any]:
         identity = self._load_or_create_device_identity()
         platform = client["platform"]
-        device_family = "server"
+        device_family = client["deviceFamily"]
         payload = self._build_device_auth_payload_v3(
             device_id=identity.device_id,
             client_id=client["id"],
