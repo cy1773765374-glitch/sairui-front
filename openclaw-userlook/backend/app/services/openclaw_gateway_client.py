@@ -87,11 +87,13 @@ class OpenClawGatewayClient:
         self,
         ws_url: str,
         token: str = "",
+        password: str = "",
         timeout_seconds: int = 300,
         device_identity_path: str | None = None,
     ) -> None:
         self.ws_url = ws_url
         self.token = token
+        self.password = password
         self.timeout_seconds = timeout_seconds
         self.device_identity_path = device_identity_path
 
@@ -187,6 +189,7 @@ class OpenClawGatewayClient:
             nonce=nonce,
             signed_at_ms=signed_at_ms,
         )
+        auth = self._build_connect_auth()
         connect_payload = {
             "type": "req",
             "id": request_id,
@@ -200,7 +203,7 @@ class OpenClawGatewayClient:
                 "caps": [],
                 "commands": [],
                 "permissions": {},
-                "auth": {"token": self.token},
+                "auth": auth,
                 "locale": "zh-CN",
                 "userAgent": "openclaw-userlook-backend",
                 "device": device,
@@ -264,6 +267,14 @@ class OpenClawGatewayClient:
             "signedAt": signed_at_ms,
             "nonce": nonce,
         }
+
+    def _build_connect_auth(self) -> dict[str, str]:
+        auth: dict[str, str] = {}
+        if self.token:
+            auth["token"] = self.token
+        if self.password:
+            auth["password"] = self.password
+        return auth
 
     def _load_or_create_device_identity(self) -> GatewayDeviceIdentity:
         path = self._resolve_device_identity_path()
