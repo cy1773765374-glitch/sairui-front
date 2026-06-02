@@ -178,6 +178,7 @@ function logout() {
   height: 100vh;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .workbench-header {
@@ -216,12 +217,16 @@ function logout() {
   height: calc(100vh - 64px);
   min-width: 0;
   min-height: 0;
+  box-sizing: border-box;
   padding: 28px;
   overflow: auto;
 }
 
 .workbench-content--chat {
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  height: calc(100dvh - 64px);
+  box-sizing: border-box;
   padding: 12px;
   overflow: hidden;
 }

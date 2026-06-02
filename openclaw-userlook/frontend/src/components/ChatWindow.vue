@@ -153,10 +153,12 @@ watch(
 
 <style scoped>
 .chat-window {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   height: 100%;
+  max-height: 100%;
   min-height: 0;
+  box-sizing: border-box;
   border: 1px solid #dfe5ee;
   border-radius: 8px;
   background: #f8fafc;
@@ -164,6 +166,7 @@ watch(
 }
 
 .chat-header {
+  flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -189,22 +192,36 @@ p {
 }
 
 .message-list {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   gap: 14px;
+  height: 0;
+  max-height: 100%;
   min-height: 0;
+  box-sizing: border-box;
   padding: 20px;
   overflow-y: auto;
 }
 
 .composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: end;
+  min-height: 112px;
+  box-sizing: border-box;
   padding: 16px 20px;
   border-top: 1px solid #dfe5ee;
   background: #ffffff;
+}
+
+.chat-window :deep(.run-status) {
+  flex: 0 0 auto;
 }
 
 .chat-error,
