@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     )
     task_chat_timeout_seconds: int = Field(default=120, alias="TASK_CHAT_TIMEOUT_SECONDS")
     task_job_timeout_seconds: int = Field(default=1800, alias="TASK_JOB_TIMEOUT_SECONDS")
+    task_queue_timeout_seconds: int = Field(default=1800, alias="TASK_QUEUE_TIMEOUT_SECONDS")
     task_stale_running_minutes: int = Field(default=30, alias="TASK_STALE_RUNNING_MINUTES")
     task_watchdog_interval_seconds: int = Field(default=60, alias="TASK_WATCHDOG_INTERVAL_SECONDS")
     task_agent_concurrency: int = Field(default=1, alias="TASK_AGENT_CONCURRENCY")
