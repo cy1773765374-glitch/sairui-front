@@ -89,18 +89,32 @@ def mark_task_run_success(
     return run
 
 
-def mark_task_run_failed(db: Session, run: TaskRun, error_message: str) -> TaskRun:
+def mark_task_run_failed(
+    db: Session,
+    run: TaskRun,
+    error_message: str,
+    output_text: str | None = None,
+) -> TaskRun:
     run.status = TaskRunStatus.failed
     run.error_message = error_message
+    if output_text is not None:
+        run.output_text = output_text
     run.finished_at = _utc_now()
     db.commit()
     db.refresh(run)
     return run
 
 
-def mark_task_run_cancelled(db: Session, run: TaskRun, message: str | None = None) -> TaskRun:
+def mark_task_run_cancelled(
+    db: Session,
+    run: TaskRun,
+    message: str | None = None,
+    output_text: str | None = None,
+) -> TaskRun:
     run.status = TaskRunStatus.cancelled
     run.error_message = message
+    if output_text is not None:
+        run.output_text = output_text
     run.finished_at = _utc_now()
     db.commit()
     db.refresh(run)

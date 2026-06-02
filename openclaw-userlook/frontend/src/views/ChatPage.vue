@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ChatDotRound, Document, Files, InfoFilled, Picture } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 
 import { fetchAgent, fetchAgents, type Agent, type AgentRiskLevel } from '../api/agents'
 import {
@@ -43,7 +43,6 @@ const conversation = ref<Conversation | null>(null)
 const messages = ref<LocalMessage[]>([])
 const activeAssistantMessageId = ref<string | null>(null)
 const errorMessage = ref('')
-const highRiskConfirmedCodes = ref<Set<string>>(new Set())
 const attachedFiles = ref<UserFile[]>([])
 const outputFiles = ref<UserFile[]>([])
 const currentRunId = ref<number | null>(null)
@@ -85,6 +84,12 @@ function normalizeMessages(serverMessages: Awaited<ReturnType<typeof fetchConver
   messages.value = serverMessages.map((message) => ({ ...message, streaming: false }))
 }
 
+function parseConversationId(value: unknown) {
+  const rawValue = Array.isArray(value) ? value[0] : value
+  const numericValue = Number(rawValue)
+  return Number.isInteger(numericValue) && numericValue > 0 ? numericValue : undefined
+}
+
 async function refreshSidebarData() {
   const [agentResult, conversationResult] = await Promise.all([fetchAgents(), fetchConversations()])
   agents.value = agentResult
@@ -95,23 +100,6 @@ async function loadHistory(conversationId: number) {
   const detail = await fetchConversation(conversationId)
   conversation.value = detail
   normalizeMessages(detail.messages)
-}
-
-async function confirmHighRiskAgent(currentAgent: Agent) {
-  if (currentAgent.risk_level !== 'high' || highRiskConfirmedCodes.value.has(currentAgent.code)) {
-    return
-  }
-
-  await ElMessageBox.confirm(
-    '该 Agent 可能访问敏感数据、调用工具或执行高风险操作。首次进入对话前需要确认是否继续。',
-    '高风险 Agent 确认',
-    {
-      confirmButtonText: '继续进入',
-      cancelButtonText: '取消',
-      type: 'warning',
-    },
-  )
-  highRiskConfirmedCodes.value = new Set(highRiskConfirmedCodes.value).add(currentAgent.code)
 }
 
 function clearReconnectTimer() {
@@ -217,6 +205,13 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
         outputFiles.value = payload.output_files
       }
       sending.value = !['success', 'failed', 'cancelled', 'done', 'idle'].includes(payload.status)
+      if (['failed', 'cancelled', 'idle'].includes(payload.status)) {
+        const target = messages.value.find((message) => message.id === activeAssistantMessageId.value)
+        if (target) {
+          target.streaming = false
+        }
+        activeAssistantMessageId.value = null
+      }
       return
     }
 
@@ -284,17 +279,12 @@ async function initializeAgent(agentCode: string, preferredConversationId?: numb
       await refreshSidebarData()
     }
     const currentAgent = agents.value.find((item) => item.code === agentCode) ?? (await fetchAgent(agentCode))
-    await confirmHighRiskAgent(currentAgent)
     agent.value = currentAgent
     await ensureConversation(currentAgent, preferredConversationId)
     if (conversation.value) {
       connectWebSocket(conversation.value.id)
     }
   } catch (error) {
-    if (String(error) === 'cancel') {
-      router.push({ name: 'agents' })
-      return
-    }
     ElMessage.error('对话初始化失败')
     router.push({ name: 'agents' })
   } finally {
@@ -307,7 +297,7 @@ async function selectAgent(nextAgent: Agent) {
     await initializeAgent(nextAgent.code)
     return
   }
-  router.push({ name: 'agent-chat', params: { agentCode: nextAgent.code } })
+  router.push({ name: 'agent-chat', params: { agentCode: nextAgent.code }, query: {} })
 }
 
 async function selectConversation(nextConversation: Conversation) {
@@ -317,6 +307,13 @@ async function selectConversation(nextConversation: Conversation) {
       await router.push({
         name: 'agent-chat',
         params: { agentCode: nextConversation.agent_code },
+        query: { conversationId: String(nextConversation.id) },
+      })
+    } else {
+      await router.push({
+        name: 'agent-chat',
+        params: { agentCode: nextConversation.agent_code },
+        query: { conversationId: String(nextConversation.id) },
       })
     }
     await initializeAgent(nextConversation.agent_code, nextConversation.id)
@@ -329,13 +326,6 @@ async function sendMessage(content: string, fileIds: number[]) {
   if (!socket || socket.readyState !== WebSocket.OPEN || !conversation.value) {
     ElMessage.error('WebSocket 未连接')
     return
-  }
-  if (agent.value) {
-    try {
-      await confirmHighRiskAgent(agent.value)
-    } catch {
-      return
-    }
   }
 
   sending.value = true
@@ -367,6 +357,25 @@ async function sendMessage(content: string, fileIds: number[]) {
   }
 }
 
+function stopCurrentRun() {
+  if (!socket || socket.readyState !== WebSocket.OPEN || !currentRunId.value) {
+    return
+  }
+  socket.send(
+    JSON.stringify({
+      type: 'cancel_run',
+      run_id: currentRunId.value,
+    }),
+  )
+  sending.value = false
+  currentRunStatus.value = 'cancelled'
+  currentRunStatusMessage.value = '正在停止当前回复'
+  const target = messages.value.find((message) => message.id === activeAssistantMessageId.value)
+  if (target) {
+    target.streaming = false
+  }
+}
+
 function addUploadedFile(file: UserFile) {
   if (!attachedFiles.value.some((item) => item.id === file.id)) {
     attachedFiles.value.push(file)
@@ -378,10 +387,10 @@ function removeAttachedFile(fileId: number) {
 }
 
 watch(
-  () => route.params.agentCode,
-  (agentCode) => {
+  () => [route.params.agentCode, route.query.conversationId],
+  ([agentCode, conversationId]) => {
     if (!suppressRouteWatch && agentCode) {
-      initializeAgent(String(agentCode))
+      initializeAgent(String(agentCode), parseConversationId(conversationId))
     }
   },
 )
@@ -394,7 +403,7 @@ onMounted(async () => {
     router.push({ name: 'agents' })
     return
   }
-  await initializeAgent(agentCode)
+  await initializeAgent(agentCode, parseConversationId(route.query.conversationId))
 })
 
 onBeforeUnmount(() => {
@@ -477,6 +486,7 @@ onBeforeUnmount(() => {
         :run-status-message="currentRunStatusMessage"
         :output-files="outputFiles"
         @send="sendMessage"
+        @stop="stopCurrentRun"
         @file-uploaded="addUploadedFile"
         @remove-file="removeAttachedFile"
       />
@@ -566,12 +576,17 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr) 300px;
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
+  height: calc(100vh - 120px);
+  min-height: 0;
 }
 
 .chat-panel {
   display: grid;
+  align-content: start;
   gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .chat-panel .el-card {
@@ -633,7 +648,9 @@ onBeforeUnmount(() => {
 }
 
 .chat-main {
+  display: grid;
   min-width: 0;
+  min-height: 0;
 }
 
 .mobile-detail-button {
@@ -689,6 +706,7 @@ onBeforeUnmount(() => {
 @media (max-width: 820px) {
   .chat-page {
     grid-template-columns: 1fr;
+    height: auto;
   }
 }
 </style>
