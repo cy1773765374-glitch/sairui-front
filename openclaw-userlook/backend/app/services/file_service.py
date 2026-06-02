@@ -106,6 +106,52 @@ def validate_user_upload_file_ids(db: Session, current_user: User, file_ids: lis
         )
 
 
+def list_gateway_upload_files(db: Session, current_user: User, file_ids: list[int]) -> list[dict[str, object]]:
+    if not file_ids:
+        return []
+
+    settings = get_settings()
+    root = _resolve_root(settings.user_upload_root)
+    unique_file_ids = list(dict.fromkeys(file_ids))
+    files = list(
+        db.scalars(
+            select(File).where(
+                File.id.in_(unique_file_ids),
+                File.user_id == current_user.id,
+                File.purpose == FilePurpose.upload,
+            )
+        )
+    )
+    files_by_id = {file.id: file for file in files}
+    if set(files_by_id) != set(unique_file_ids):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid file_ids",
+        )
+
+    gateway_files: list[dict[str, object]] = []
+    for file_id in unique_file_ids:
+        file = files_by_id[file_id]
+        stored_path = Path(file.stored_path).expanduser().resolve()
+        if not _is_relative_to(stored_path, root) or not stored_path.is_file():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid file_ids",
+            )
+        gateway_files.append(
+            {
+                "id": file.id,
+                "original_name": file.original_name,
+                "file_type": file.file_type,
+                "file_size": file.file_size,
+                "path": str(stored_path),
+                "stored_path": str(stored_path),
+                "purpose": file.purpose.value,
+            }
+        )
+    return gateway_files
+
+
 async def save_upload_file(db: Session, current_user: User, upload: UploadFile) -> FileRead:
     settings = get_settings()
     original_name = Path(upload.filename or "upload").name

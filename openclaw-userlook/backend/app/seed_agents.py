@@ -1,18 +1,19 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import models  # noqa: F401
 from app.core.database import Base, SessionLocal, engine
 from app.models.agent import Agent, AgentRiskLevel
-from app import models  # noqa: F401
 
 
 DEFAULT_AGENTS = [
     {
         "code": "main",
-        "name": "主助手",
+        "name": "主助理 Agent",
         "description": "通用问题处理与日常辅助 Agent。",
         "category": "general",
         "openclaw_agent_id": "main",
+        "enabled": True,
         "risk_level": AgentRiskLevel.medium,
         "support_files": True,
         "support_images": True,
@@ -20,9 +21,10 @@ DEFAULT_AGENTS = [
     {
         "code": "mysql_analysis",
         "name": "MySQL 分析 Agent",
-        "description": "用于数据库分析与查询辅助的高风险 Agent。",
+        "description": "用于数据库分析与查询辅助的 Agent。",
         "category": "data",
         "openclaw_agent_id": "huizong-ceshi",
+        "enabled": True,
         "risk_level": AgentRiskLevel.high,
         "support_files": False,
         "support_images": False,
@@ -33,6 +35,7 @@ DEFAULT_AGENTS = [
         "description": "用于演示文稿内容整理与生成的文档 Agent。",
         "category": "document",
         "openclaw_agent_id": "ppt-generation",
+        "enabled": True,
         "risk_level": AgentRiskLevel.medium,
         "support_files": True,
         "support_images": True,
@@ -43,6 +46,7 @@ DEFAULT_AGENTS = [
         "description": "用于图片和刀版合成处理的设计 Agent。",
         "category": "design",
         "openclaw_agent_id": "image-daoban",
+        "enabled": True,
         "risk_level": AgentRiskLevel.medium,
         "support_files": True,
         "support_images": True,
@@ -50,9 +54,10 @@ DEFAULT_AGENTS = [
     {
         "code": "spider_1688",
         "name": "1688 采集 Agent",
-        "description": "用于 1688 数据采集的高风险 Agent。",
-        "category": "crawler",
+        "description": "外部服务器 Agent，当前服务器暂未接入。",
+        "category": "external",
         "openclaw_agent_id": "spider",
+        "enabled": False,
         "risk_level": AgentRiskLevel.high,
         "support_files": False,
         "support_images": False,
@@ -60,9 +65,10 @@ DEFAULT_AGENTS = [
     {
         "code": "xingzheng",
         "name": "行政快递汇总 Agent",
-        "description": "用于行政快递数据汇总和办公报表处理的 Agent。",
-        "category": "office",
+        "description": "外部服务器 Agent，当前服务器暂未接入。",
+        "category": "external",
         "openclaw_agent_id": "xingzheng_a",
+        "enabled": False,
         "risk_level": AgentRiskLevel.medium,
         "support_files": True,
         "support_images": True,

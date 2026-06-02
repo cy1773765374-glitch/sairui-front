@@ -87,6 +87,8 @@ curl -X POST http://127.0.0.1:10009/api/auth/register ^
   -d "{\"username\":\"zhangsan\",\"password\":\"Admin@123456\",\"display_name\":\"张三\"}"
 ```
 
+Web username/password registration creates a `pending` normal user. An admin must approve the user before login.
+
 Login:
 
 ```bash

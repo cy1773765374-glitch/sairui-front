@@ -50,6 +50,8 @@ class OpenClawGatewayClient:
         conversation: Conversation,
         content: str,
         file_ids: list[int],
+        files: list[dict[str, Any]] | None = None,
+        run_id: int | None = None,
         output_dir: str | None = None,
     ) -> AsyncIterator[OpenClawGatewayEvent]:
         request_payload = self._build_chat_request(
@@ -58,6 +60,8 @@ class OpenClawGatewayClient:
             conversation=conversation,
             content=content,
             file_ids=file_ids,
+            files=files or [],
+            run_id=run_id,
             output_dir=output_dir,
         )
         headers = self._build_headers()
@@ -104,6 +108,8 @@ class OpenClawGatewayClient:
         conversation: Conversation,
         content: str,
         file_ids: list[int],
+        files: list[dict[str, Any]],
+        run_id: int | None,
         output_dir: str | None,
     ) -> dict[str, Any]:
         payload = {
@@ -112,6 +118,15 @@ class OpenClawGatewayClient:
             "stream": True,
             "agent_id": agent.openclaw_agent_id,
             "session_key": conversation.session_key,
+            "conversation": {
+                "id": conversation.id,
+                "title": conversation.title,
+                "session_key": conversation.session_key,
+            },
+            "run": {
+                "id": run_id,
+                "output_dir": output_dir,
+            },
             "user": {
                 "id": user.id,
                 "username": user.username,
@@ -122,7 +137,9 @@ class OpenClawGatewayClient:
                 "role": "user",
                 "content": content,
                 "file_ids": file_ids,
+                "files": files,
             },
+            "files": files,
         }
         if output_dir:
             payload["output_dir"] = output_dir
@@ -146,24 +163,37 @@ class OpenClawGatewayClient:
             payload.get("type")
             or payload.get("event")
             or payload.get("status")
+            or payload.get("state")
             or ""
         ).lower()
+        status_value = str(payload.get("status") or payload.get("state") or "").lower()
+        normalized_state = status_value or event_type
 
-        if event_type in {"error", "failed", "exception"}:
+        if normalized_state in {"error", "failed", "failure", "exception"}:
             return OpenClawGatewayEvent(
                 type="error",
                 content=self._extract_error_message(payload),
                 raw=payload,
             )
 
-        if event_type in {"done", "assistant_done", "end", "completed", "complete", "finished"}:
+        if normalized_state in {"done", "assistant_done", "end", "completed", "complete", "finished", "success"}:
             return OpenClawGatewayEvent(
                 type="done",
                 output_dir=self._extract_output_dir(payload),
                 raw=payload,
             )
 
-        if event_type in {"run_status", "status", "progress", "started", "running"}:
+        if event_type in {
+            "run_status",
+            "status",
+            "progress",
+            "queued",
+            "pending",
+            "started",
+            "start",
+            "running",
+            "working",
+        }:
             return OpenClawGatewayEvent(
                 type="run_status",
                 status=str(payload.get("status") or event_type),
@@ -178,10 +208,14 @@ class OpenClawGatewayClient:
         return OpenClawGatewayEvent(type="run_status", status=event_type or "received", raw=payload)
 
     def _extract_text(self, payload: dict[str, Any]) -> str:
-        for key in ("delta", "content", "text", "message", "output"):
+        for key in ("delta", "content", "text", "message", "output", "answer", "data"):
             value = payload.get(key)
             if isinstance(value, str):
                 return value
+            if isinstance(value, list):
+                text_parts = [item for item in value if isinstance(item, str)]
+                if text_parts:
+                    return "".join(text_parts)
             if isinstance(value, dict):
                 nested = self._extract_text(value)
                 if nested:
@@ -189,10 +223,14 @@ class OpenClawGatewayClient:
         return ""
 
     def _extract_output_dir(self, payload: dict[str, Any]) -> str | None:
-        for key in ("output_dir", "outputPath", "output_path"):
+        for key in ("output_dir", "outputPath", "output_path", "outputDirectory", "output_directory"):
             value = payload.get(key)
             if isinstance(value, str) and value:
                 return value
+            if isinstance(value, dict):
+                nested = self._extract_output_dir(value)
+                if nested:
+                    return nested
         return None
 
     def _extract_error_message(self, payload: dict[str, Any]) -> str:
