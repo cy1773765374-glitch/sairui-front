@@ -2,12 +2,13 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from app.models.agent import Agent
 from app.models.conversation import Conversation
 from app.models.message import Message, MessageRole
+from app.models.task_run import TaskRun
 from app.models.user import User, UserRole
 from app.schemas.conversation import ConversationCreate, ConversationDetail, ConversationRead
 from app.services.agent_service import user_can_access_agent
@@ -99,6 +100,22 @@ def get_conversation_detail(
         )
     )
     return ConversationDetail(**_to_read(conversation, agent).model_dump(), messages=messages)
+
+
+def delete_conversation(
+    db: Session,
+    current_user: User,
+    conversation_id: int,
+) -> None:
+    conversation = require_conversation_for_user(db, current_user, conversation_id)
+    db.execute(delete(Message).where(Message.conversation_id == conversation.id))
+    db.execute(
+        update(TaskRun)
+        .where(TaskRun.conversation_id == conversation.id)
+        .values(conversation_id=None)
+    )
+    db.delete(conversation)
+    db.commit()
 
 
 def require_conversation_for_user(

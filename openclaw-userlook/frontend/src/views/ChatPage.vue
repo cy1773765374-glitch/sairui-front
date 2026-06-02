@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChatDotRound, Document, Files, InfoFilled, Picture, Plus } from '@element-plus/icons-vue'
-import { ElMessage, ElNotification } from 'element-plus'
+import { ChatDotRound, Delete, Document, Files, InfoFilled, Picture, Plus } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 
 import { fetchAgent, fetchAgents, type Agent, type AgentRiskLevel } from '../api/agents'
 import {
   buildConversationWebSocketUrl,
   createConversation,
+  deleteConversation,
   fetchConversation,
   fetchConversations,
   type Conversation,
@@ -48,6 +49,7 @@ const outputFiles = ref<UserFile[]>([])
 const currentRunId = ref<number | null>(null)
 const currentRunStatus = ref<TaskRunStatus | ''>('')
 const currentRunStatusMessage = ref('')
+const deletingConversationId = ref<number | null>(null)
 
 let socket: WebSocket | null = null
 let socketConversationId: number | null = null
@@ -406,6 +408,25 @@ async function selectAgent(nextAgent: Agent) {
   router.push({ name: 'agent-chat', params: { agentCode: nextAgent.code }, query: {} })
 }
 
+function isConversationDeleteBlocked(nextConversation: Conversation) {
+  return (
+    nextConversation.id === conversation.value?.id &&
+    (sending.value || currentRunStatus.value === 'pending' || currentRunStatus.value === 'running')
+  )
+}
+
+function getDeleteConversationTooltip(nextConversation: Conversation) {
+  return isConversationDeleteBlocked(nextConversation) ? '请先停止当前任务' : '删除历史对话'
+}
+
+async function createNewConversationForCurrentAgent() {
+  if (!agent.value) {
+    ElMessage.warning('请先选择 Agent')
+    return
+  }
+  await createNewConversationForAgent(agent.value)
+}
+
 async function createNewConversationForAgent(nextAgent: Agent) {
   suppressRouteWatch = true
   closeActiveSocket()
@@ -428,6 +449,63 @@ async function createNewConversationForAgent(nextAgent: Agent) {
     ElMessage.error('新建对话失败')
   } finally {
     suppressRouteWatch = false
+  }
+}
+
+async function deleteHistoryConversation(nextConversation: Conversation) {
+  if (isConversationDeleteBlocked(nextConversation)) {
+    ElMessage.warning('请先停止当前任务')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm('删除后该会话和消息将无法恢复，是否继续？', '删除历史对话', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+    })
+  } catch {
+    return
+  }
+
+  const isDeletingCurrent = nextConversation.id === conversation.value?.id
+  deletingConversationId.value = nextConversation.id
+  try {
+    await deleteConversation(nextConversation.id)
+    const remainingConversations = conversations.value.filter((item) => item.id !== nextConversation.id)
+    conversations.value = remainingConversations
+    ElMessage.success('历史对话已删除')
+
+    if (!isDeletingCurrent) {
+      return
+    }
+
+    closeActiveSocket()
+    resetConversationRuntimeState()
+    attachedFiles.value = []
+    errorMessage.value = ''
+    messages.value = []
+    conversation.value = null
+
+    const nextConversationForAgent = remainingConversations.find(
+      (item) => item.agent_id === nextConversation.agent_id,
+    )
+    if (nextConversationForAgent) {
+      await selectConversation(nextConversationForAgent)
+      return
+    }
+
+    const nextAgent =
+      agents.value.find((item) => item.id === nextConversation.agent_id) ??
+      (agent.value?.id === nextConversation.agent_id ? agent.value : null)
+    if (nextAgent) {
+      await createNewConversationForAgent(nextAgent)
+    }
+  } catch {
+    ElMessage.error('删除历史对话失败')
+  } finally {
+    deletingConversationId.value = null
   }
 }
 
@@ -584,16 +662,6 @@ onBeforeUnmount(() => {
                 {{ item.risk_level }}
               </el-tag>
             </button>
-            <el-tooltip content="新建对话">
-              <el-button
-                class="new-conversation-button"
-                :icon="Plus"
-                circle
-                plain
-                size="small"
-                @click="createNewConversationForAgent(item)"
-              />
-            </el-tooltip>
           </div>
         </div>
       </el-card>
@@ -602,21 +670,49 @@ onBeforeUnmount(() => {
         <template #header>
           <div class="panel-header">
             <span>历史会话</span>
-            <el-tag effect="plain">{{ conversationsByAgent.length }}</el-tag>
+            <div class="panel-header-actions">
+              <el-tag effect="plain">{{ conversationsByAgent.length }}</el-tag>
+              <el-tooltip content="新建对话">
+                <el-button
+                  class="new-conversation-button"
+                  :icon="Plus"
+                  circle
+                  plain
+                  size="small"
+                  :disabled="!agent"
+                  @click="createNewConversationForCurrentAgent"
+                />
+              </el-tooltip>
+            </div>
           </div>
         </template>
         <div class="conversation-list">
-          <button
+          <div
             v-for="item in conversationsByAgent"
             :key="item.id"
-            class="list-item conversation-item"
+            class="conversation-row"
             :class="{ active: item.id === conversation?.id }"
-            type="button"
-            @click="selectConversation(item)"
           >
-            <span>{{ item.title }}</span>
-            <small>{{ item.updated_at }}</small>
-          </button>
+            <button class="list-item conversation-item" type="button" @click="selectConversation(item)">
+              <span>{{ item.title }}</span>
+              <small>{{ item.updated_at }}</small>
+            </button>
+            <el-tooltip :content="getDeleteConversationTooltip(item)">
+              <span class="conversation-delete-wrapper">
+                <el-button
+                  class="delete-conversation-button"
+                  :icon="Delete"
+                  circle
+                  plain
+                  size="small"
+                  type="danger"
+                  :loading="deletingConversationId === item.id"
+                  :disabled="isConversationDeleteBlocked(item) || deletingConversationId === item.id"
+                  @click.stop="deleteHistoryConversation(item)"
+                />
+              </span>
+            </el-tooltip>
+          </div>
           <el-empty v-if="conversationsByAgent.length === 0" description="暂无历史会话" />
         </div>
       </el-card>
@@ -759,6 +855,12 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .agent-list,
 .conversation-list,
 .output-list {
@@ -768,7 +870,7 @@ onBeforeUnmount(() => {
 
 .agent-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   align-items: center;
 }
@@ -815,15 +917,33 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.conversation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.conversation-row:hover .conversation-item,
+.conversation-row.active .conversation-item {
+  background: #dfe9fb;
+}
+
 .conversation-item {
   display: grid;
   justify-items: start;
+  min-width: 0;
   border-radius: 12px;
 }
 
 .conversation-item small {
   color: #6f7785;
   font-size: 12px;
+}
+
+.conversation-delete-wrapper,
+.delete-conversation-button {
+  flex: 0 0 auto;
 }
 
 .chat-main {

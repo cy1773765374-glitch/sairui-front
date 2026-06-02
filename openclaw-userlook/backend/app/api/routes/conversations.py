@@ -7,6 +7,7 @@ from app.schemas.conversation import ConversationCreate, ConversationDetail, Con
 from app.services.auth_service import get_current_user
 from app.services.conversation_service import (
     create_conversation,
+    delete_conversation,
     get_conversation_detail,
     list_conversations,
 )
@@ -38,3 +39,12 @@ def get_conversation(
     current_user: User = Depends(get_current_user),
 ) -> ConversationDetail:
     return get_conversation_detail(db, current_user, conversation_id)
+
+
+@router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_existing_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    delete_conversation(db, current_user, conversation_id)

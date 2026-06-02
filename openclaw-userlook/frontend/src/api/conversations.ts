@@ -56,6 +56,10 @@ export async function fetchConversation(conversationId: number): Promise<Convers
   return response.data
 }
 
+export async function deleteConversation(conversationId: number): Promise<void> {
+  await apiClient.delete(`/api/conversations/${conversationId}`)
+}
+
 export function buildConversationWebSocketUrl(conversationId: number): string {
   const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:10009'
   const url = new URL(`/api/ws/conversations/${conversationId}`, apiBase)
