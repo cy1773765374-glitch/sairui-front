@@ -8,10 +8,19 @@ from collections import defaultdict
 class TaskQueueRegistry:
     def __init__(self) -> None:
         self._agent_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._chat_semaphores: dict[int, asyncio.Semaphore] = {}
         self._running_tasks: dict[int, asyncio.Task[None]] = {}
 
     def get_agent_lock(self, agent_id: int) -> asyncio.Lock:
         return self._agent_locks[agent_id]
+
+    def get_chat_semaphore(self, max_concurrency: int) -> asyncio.Semaphore:
+        limit = max(1, max_concurrency)
+        semaphore = self._chat_semaphores.get(limit)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(limit)
+            self._chat_semaphores[limit] = semaphore
+        return semaphore
 
     def register_task(self, run_id: int, task: asyncio.Task[None]) -> None:
         self._running_tasks[run_id] = task

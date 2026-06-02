@@ -91,7 +91,7 @@ async def start_chat_run(
     gateway_files: list[dict[str, object]],
 ) -> None:
     task = asyncio.create_task(
-        execute_chat_run(
+        execute_chat_run_with_global_limit(
             run_id=run_id,
             user_id=user_id,
             agent_id=agent_id,
@@ -102,6 +102,32 @@ async def start_chat_run(
         )
     )
     task_queue.register_task(run_id, task)
+
+
+async def execute_chat_run_with_global_limit(
+    *,
+    run_id: int,
+    user_id: int,
+    agent_id: int,
+    conversation_id: int,
+    content: str,
+    file_ids: list[int],
+    gateway_files: list[dict[str, object]],
+) -> None:
+    settings = get_settings()
+    try:
+        async with task_queue.get_chat_semaphore(settings.task_global_chat_concurrency):
+            await execute_chat_run(
+                run_id=run_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                content=content,
+                file_ids=file_ids,
+                gateway_files=gateway_files,
+            )
+    finally:
+        task_queue.unregister_task(run_id)
 
 
 async def execute_chat_run(
@@ -289,11 +315,36 @@ async def execute_chat_run(
                         "OpenClaw Gateway 响应超时",
                         output_text=assistant_content or None,
                     )
+                    output_files_payload = []
+                    if assistant_content:
+                        assistant_message = save_message(
+                            db,
+                            conversation,
+                            MessageRole.assistant,
+                            assistant_content,
+                            raw_payload={
+                                "partial": True,
+                                "timeout": True,
+                                "gateway_event": last_gateway_event,
+                            },
+                            run_id=run.id,
+                        )
+                        output_files = register_output_files(db, user.id, run.output_dir)
+                        output_files_payload = jsonable_encoder(output_files)
+                        run.output_files_json = output_files_payload
+                        db.commit()
+                        await _broadcast_assistant_done(
+                            conversation_id,
+                            message_id=assistant_message.id,
+                            run_id=run.id,
+                            output_files=output_files_payload,
+                        )
                     await _broadcast_run_status(
                         conversation_id,
                         run_id=run.id,
                         status_value="timeout",
                         message=run.error_message,
+                        output_files=output_files_payload,
                     )
                     return
 

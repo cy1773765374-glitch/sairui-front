@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.models.task_run import TaskRun, TaskRunStatus
+from app.services.task_queue import task_queue
 
 
 def _utc_now() -> datetime:
@@ -47,6 +48,7 @@ def scan_stale_task_runs() -> int:
                     run.error_message = "任务执行超过超时时间"
                     run.finished_at = now
                     run.cancel_requested = False
+                    task_queue.cancel_task(run.id)
                     changed += 1
                     continue
 
@@ -56,6 +58,7 @@ def scan_stale_task_runs() -> int:
                     run.error_message = "任务心跳过期，已标记为 stale"
                     run.finished_at = now
                     run.cancel_requested = False
+                    task_queue.cancel_task(run.id)
                     changed += 1
                     continue
 
@@ -71,6 +74,7 @@ def scan_stale_task_runs() -> int:
                     run.error_message = "任务排队超过超时时间"
                     run.finished_at = now
                     run.cancel_requested = False
+                    task_queue.cancel_task(run.id)
                     changed += 1
 
         if changed:

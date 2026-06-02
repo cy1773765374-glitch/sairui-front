@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     task_stale_running_minutes: int = Field(default=30, alias="TASK_STALE_RUNNING_MINUTES")
     task_watchdog_interval_seconds: int = Field(default=60, alias="TASK_WATCHDOG_INTERVAL_SECONDS")
     task_agent_concurrency: int = Field(default=1, alias="TASK_AGENT_CONCURRENCY")
-    task_global_chat_concurrency: int = Field(default=3, alias="TASK_GLOBAL_CHAT_CONCURRENCY")
+    task_global_chat_concurrency: int = Field(default=1, alias="TASK_GLOBAL_CHAT_CONCURRENCY")
     task_global_job_concurrency: int = Field(default=1, alias="TASK_GLOBAL_JOB_CONCURRENCY")
     mock_openclaw: bool = Field(default=True, alias="MOCK_OPENCLAW")
     database_url: str = Field(
