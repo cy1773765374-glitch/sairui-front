@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChatDotRound, Document, Files, InfoFilled, Picture } from '@element-plus/icons-vue'
+import { ChatDotRound, Document, Files, InfoFilled, Picture, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElNotification } from 'element-plus'
 
 import { fetchAgent, fetchAgents, type Agent, type AgentRiskLevel } from '../api/agents'
@@ -82,6 +82,15 @@ function riskTagType(riskLevel?: AgentRiskLevel) {
 
 function normalizeMessages(serverMessages: Awaited<ReturnType<typeof fetchConversation>>['messages']) {
   messages.value = serverMessages.map((message) => ({ ...message, streaming: false }))
+}
+
+function resetConversationRuntimeState() {
+  sending.value = false
+  activeAssistantMessageId.value = null
+  outputFiles.value = []
+  currentRunId.value = null
+  currentRunStatus.value = ''
+  currentRunStatusMessage.value = ''
 }
 
 function parseConversationId(value: unknown) {
@@ -245,6 +254,17 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
   }
 }
 
+function closeActiveSocket() {
+  clearReconnectTimer()
+  if (socket) {
+    socket.onclose = null
+    socket.onerror = null
+    socket.close()
+    socket = null
+  }
+  connected.value = false
+}
+
 async function ensureConversation(currentAgent: Agent, preferredConversationId?: number) {
   if (preferredConversationId) {
     await loadHistory(preferredConversationId)
@@ -269,10 +289,7 @@ async function initializeAgent(agentCode: string, preferredConversationId?: numb
   loading.value = true
   errorMessage.value = ''
   attachedFiles.value = []
-  outputFiles.value = []
-  currentRunId.value = null
-  currentRunStatus.value = ''
-  currentRunStatusMessage.value = ''
+  resetConversationRuntimeState()
 
   try {
     if (agents.value.length === 0 || conversations.value.length === 0) {
@@ -293,6 +310,8 @@ async function initializeAgent(agentCode: string, preferredConversationId?: numb
 }
 
 async function selectAgent(nextAgent: Agent) {
+  closeActiveSocket()
+  resetConversationRuntimeState()
   if (String(route.params.agentCode) === nextAgent.code) {
     await initializeAgent(nextAgent.code)
     return
@@ -300,9 +319,36 @@ async function selectAgent(nextAgent: Agent) {
   router.push({ name: 'agent-chat', params: { agentCode: nextAgent.code }, query: {} })
 }
 
+async function createNewConversationForAgent(nextAgent: Agent) {
+  suppressRouteWatch = true
+  closeActiveSocket()
+  resetConversationRuntimeState()
+  attachedFiles.value = []
+  errorMessage.value = ''
+  try {
+    const created = await createConversation({
+      agent_id: nextAgent.id,
+      title: `${nextAgent.name} 对话`,
+    })
+    conversations.value = [created, ...conversations.value.filter((item) => item.id !== created.id)]
+    await router.push({
+      name: 'agent-chat',
+      params: { agentCode: nextAgent.code },
+      query: { conversationId: String(created.id) },
+    })
+    await initializeAgent(nextAgent.code, created.id)
+  } catch {
+    ElMessage.error('新建对话失败')
+  } finally {
+    suppressRouteWatch = false
+  }
+}
+
 async function selectConversation(nextConversation: Conversation) {
   suppressRouteWatch = true
   try {
+    closeActiveSocket()
+    resetConversationRuntimeState()
     if (String(route.params.agentCode) !== nextConversation.agent_code) {
       await router.push({
         name: 'agent-chat',
@@ -428,19 +474,29 @@ onBeforeUnmount(() => {
           </div>
         </template>
         <div class="agent-list">
-          <button
+          <div
             v-for="item in agents"
             :key="item.code"
-            class="list-item"
+            class="agent-row"
             :class="{ active: item.code === agent?.code }"
-            type="button"
-            @click="selectAgent(item)"
           >
-            <span>{{ item.name }}</span>
-            <el-tag size="small" :type="riskTagType(item.risk_level)" effect="plain">
-              {{ item.risk_level }}
-            </el-tag>
-          </button>
+            <button class="list-item agent-select" type="button" @click="selectAgent(item)">
+              <span>{{ item.name }}</span>
+              <el-tag size="small" :type="riskTagType(item.risk_level)" effect="plain">
+                {{ item.risk_level }}
+              </el-tag>
+            </button>
+            <el-tooltip content="新建对话">
+              <el-button
+                class="new-conversation-button"
+                :icon="Plus"
+                circle
+                plain
+                size="small"
+                @click="createNewConversationForAgent(item)"
+              />
+            </el-tooltip>
+          </div>
         </div>
       </el-card>
 
@@ -577,8 +633,9 @@ onBeforeUnmount(() => {
   grid-template-columns: 280px minmax(0, 1fr) 300px;
   gap: 16px;
   align-items: stretch;
-  height: calc(100vh - 120px);
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .chat-panel {
@@ -607,6 +664,18 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
+.agent-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.agent-row:hover .agent-select,
+.agent-row.active .agent-select {
+  background: #dfe9fb;
+}
+
 .list-item {
   display: flex;
   width: 100%;
@@ -627,6 +696,14 @@ onBeforeUnmount(() => {
 .list-item:hover,
 .list-item.active {
   background: #dfe9fb;
+}
+
+.agent-select {
+  border-radius: 20px;
+}
+
+.new-conversation-button {
+  flex: 0 0 auto;
 }
 
 .list-item span {
@@ -651,6 +728,7 @@ onBeforeUnmount(() => {
   display: grid;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .mobile-detail-button {
@@ -706,7 +784,41 @@ onBeforeUnmount(() => {
 @media (max-width: 820px) {
   .chat-page {
     grid-template-columns: 1fr;
-    height: auto;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100%;
+  }
+
+  .left-panel {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    max-height: 172px;
+    overflow-y: auto;
+  }
+
+  .left-panel :deep(.el-card__header) {
+    padding: 10px 12px;
+  }
+
+  .left-panel :deep(.el-card__body) {
+    padding: 10px 12px;
+  }
+
+  .agent-list,
+  .conversation-list {
+    max-height: 92px;
+    overflow-y: auto;
+  }
+
+  .list-item {
+    min-height: 36px;
+    padding: 7px 10px;
+    border-radius: 10px;
+  }
+}
+
+@media (max-width: 560px) {
+  .left-panel {
+    grid-template-columns: 1fr;
+    max-height: 220px;
   }
 }
 </style>
