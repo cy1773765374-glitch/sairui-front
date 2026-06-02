@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from app.core.config import Settings, get_settings
 from app.models.agent import Agent
@@ -16,14 +16,16 @@ from app.services.openclaw_gateway_client import (
 )
 
 AdapterEventType = Literal["delta", "done", "error", "run_status"]
+AdapterRunStatus = Literal["pending", "running", "success", "failed", "cancelled"]
 
 
 @dataclass(frozen=True)
 class OpenClawAdapterEvent:
     type: AdapterEventType
     content: str | None = None
-    status: str | None = None
+    status: AdapterRunStatus | None = None
     output_dir: str | None = None
+    raw: dict[str, Any] | None = None
 
 
 class OpenClawAdapter:
@@ -72,6 +74,7 @@ class OpenClawAdapter:
                     content=event.content,
                     status=event.status,
                     output_dir=event.output_dir,
+                    raw=event.raw,
                 )
         except OpenClawGatewayConnectionError as exc:
             message = str(exc) or GATEWAY_UNAVAILABLE_MESSAGE
