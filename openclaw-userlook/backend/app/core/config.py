@@ -1,7 +1,10 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
@@ -14,6 +17,7 @@ class Settings(BaseSettings):
         alias="OPENCLAW_GATEWAY_WS_URL",
     )
     openclaw_gateway_token: str = Field(default="", alias="OPENCLAW_GATEWAY_TOKEN")
+    openclaw_gateway_password: str = Field(default="", alias="OPENCLAW_GATEWAY_PASSWORD")
     openclaw_gateway_timeout_seconds: int = Field(
         default=300,
         alias="OPENCLAW_GATEWAY_TIMEOUT_SECONDS",
@@ -49,7 +53,7 @@ class Settings(BaseSettings):
     ]
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=BACKEND_DIR / ".env",
         env_file_encoding="utf-8",
         populate_by_name=True,
         extra="ignore",

@@ -17,6 +17,9 @@ from app.services.openclaw_gateway_client import (
 
 AdapterEventType = Literal["delta", "done", "error", "run_status"]
 AdapterRunStatus = Literal["pending", "running", "success", "failed", "cancelled"]
+GATEWAY_AUTH_MISSING_MESSAGE = (
+    "OpenClaw Gateway 认证未配置，请设置 OPENCLAW_GATEWAY_TOKEN 或 OPENCLAW_GATEWAY_PASSWORD"
+)
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,7 @@ class OpenClawAdapter:
         self.gateway_client = gateway_client or OpenClawGatewayClient(
             ws_url=self.settings.openclaw_gateway_ws_url,
             token=self.settings.openclaw_gateway_token,
+            password=self.settings.openclaw_gateway_password,
             timeout_seconds=self.settings.openclaw_gateway_timeout_seconds,
         )
 
@@ -56,6 +60,12 @@ class OpenClawAdapter:
         if self.settings.mock_openclaw:
             async for event in self._mock_stream(content):
                 yield event
+            return
+        if (
+            not self.settings.openclaw_gateway_token
+            and not self.settings.openclaw_gateway_password
+        ):
+            yield OpenClawAdapterEvent(type="error", content=GATEWAY_AUTH_MISSING_MESSAGE)
             return
 
         try:

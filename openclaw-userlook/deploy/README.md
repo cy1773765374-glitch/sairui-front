@@ -73,6 +73,7 @@ nano .env
 - `DEFAULT_ADMIN_PASSWORD`
 - `OPENCLAW_GATEWAY_WS_URL=ws://127.0.0.1:18789`
 - `OPENCLAW_GATEWAY_TOKEN`
+- `OPENCLAW_GATEWAY_PASSWORD`
 - `MOCK_OPENCLAW=false`
 - `USER_UPLOAD_ROOT=/data/openclaw-userlook/uploads`
 - `USER_OUTPUT_ROOT=/data/openclaw-userlook/outputs`
