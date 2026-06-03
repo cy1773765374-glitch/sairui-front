@@ -150,7 +150,11 @@ curl -X POST http://127.0.0.1:10009/api/admin/agents/main/permissions ^
 - `OPENCLAW_GATEWAY_PASSWORD`
 - `OPENCLAW_GATEWAY_TIMEOUT_SECONDS`
 - `TASK_CHAT_TIMEOUT_SECONDS`
+- `TASK_SHORT_CHAT_TIMEOUT_SECONDS`
+- `TASK_GATEWAY_FINAL_SILENCE_SECONDS`
+- `TASK_ASSUME_DONE_AFTER_TEXT_SILENCE`
 - `TASK_JOB_TIMEOUT_SECONDS`
+- `TASK_QUEUE_TIMEOUT_SECONDS`
 - `TASK_STALE_RUNNING_MINUTES`
 - `TASK_WATCHDOG_INTERVAL_SECONDS`
 - `TASK_AGENT_CONCURRENCY`
@@ -176,9 +180,11 @@ WS /api/ws/conversations/{conversation_id}?token={JWT}
 
 `ws_chat.py` validates uploaded `file_ids`, creates a queued `task_runs` row, saves the user message with `run_id`, records `audit_logs.action=agent.invoke`, then hands execution to the in-process task executor. The executor owns its own SQLAlchemy session, streams through `OpenClawAdapter`, persists the assistant message with `run_id`, and always moves the run to a terminal status. Task status events include `run_id`, and completed runs scan `USER_OUTPUT_ROOT/{user_id}/{yyyyMMdd}/run_{run_id}` for supported output files.
 
-Phase 11 uses in-process per-agent locks and FastAPI lifespan background tasks. Run one backend worker process per service instance; multi-process or multi-instance queue coordination requires a later distributed queue/lock design.
+The current chat queue follows the OpenClaw Feishu/Lark plugin scheduling model only as a reference: FastAPI keeps a process-level queue, serializes tasks by `conversation_id`, and allows different conversations or different Agents to run concurrently. `TASK_GLOBAL_CHAT_CONCURRENCY` is only a global concurrency guard; it is not a global serial queue.
 
-The FastAPI lifespan watchdog scans old `running` and `queued` rows at startup and every `TASK_WATCHDOG_INTERVAL_SECONDS` seconds. Runs that exceed `timeout_seconds` become `timeout`; running runs with stale heartbeat become `stale`.
+Stop requests use an abort fast-path through the active dispatcher and then persist the final `cancelled` status. The current queue is still in a single FastAPI process. Production deployments must keep one backend worker process; multi-worker or multi-instance queue coordination requires a later Redis, Celery, or database-backed queue design.
+
+The FastAPI lifespan watchdog scans old `running` and `queued` rows at startup and every `TASK_WATCHDOG_INTERVAL_SECONDS` seconds. Queued runs that exceed `TASK_QUEUE_TIMEOUT_SECONDS` become `timeout`; running runs that exceed `timeout_seconds` become `timeout`; running runs with stale heartbeat become `stale`. Watchdog updates do not overwrite terminal runs.
 
 Gateway failure is returned to the browser as:
 

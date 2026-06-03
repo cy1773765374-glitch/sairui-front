@@ -76,9 +76,14 @@ nano .env
 - `OPENCLAW_GATEWAY_PASSWORD`
 - `MOCK_OPENCLAW=false`
 - `TASK_CHAT_TIMEOUT_SECONDS=120`
+- `TASK_SHORT_CHAT_TIMEOUT_SECONDS=600`
+- `TASK_GATEWAY_FINAL_SILENCE_SECONDS=20`
+- `TASK_ASSUME_DONE_AFTER_TEXT_SILENCE=true`
 - `TASK_JOB_TIMEOUT_SECONDS=1800`
+- `TASK_QUEUE_TIMEOUT_SECONDS=1800`
 - `TASK_STALE_RUNNING_MINUTES=30`
-- `TASK_WATCHDOG_INTERVAL_SECONDS=60`
+- `TASK_WATCHDOG_INTERVAL_SECONDS=30`
+- `TASK_GLOBAL_CHAT_CONCURRENCY=3`
 - `USER_UPLOAD_ROOT=/data/openclaw-userlook/uploads`
 - `USER_OUTPUT_ROOT=/data/openclaw-userlook/outputs`
 - `MAX_UPLOAD_MB=100`
@@ -209,7 +214,9 @@ sudo systemctl status openclaw-userlook-backend.service
 - `Restart=always`。
 - 日志写入 `backend/logs/`。
 
-`openclaw-userlook-worker.service.example` 只是占位模板。Phase 11 仍不启用 Redis、Celery 或独立 worker，任务执行、per-agent 进程内锁和 watchdog 由 FastAPI lifespan 内置后台任务承载。生产环境应保持后端服务为单个 worker 进程；多进程或多实例队列协调留到后续阶段。除非替换为真实命令，否则不要启用该服务。
+当前任务队列仿照 OpenClaw 官方 Feishu/Lark 插件的调度思路：同一 `conversation_id` 串行，不同 conversation / 不同 Agent 可以并发，停止请求通过 active dispatcher 走 abort fast-path。该实现仍是单 FastAPI 进程内队列，生产环境必须保持后端服务为单个 worker 进程；多 worker / 多实例需要后续改为 Redis、Celery 或数据库队列。
+
+`openclaw-userlook-worker.service.example` 只是占位模板。本阶段仍不启用 Redis、Celery 或独立 worker，任务执行、conversation 进程内队列和 watchdog 由 FastAPI lifespan 内置后台任务承载。除非替换为真实命令，否则不要启用该服务。
 
 ## 9. 检查 OpenClaw Gateway 是否运行
 

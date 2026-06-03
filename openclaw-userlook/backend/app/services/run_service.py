@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.agent import Agent
+from app.models.message import Message
 from app.models.task_run import ACTIVE_RUN_STATUSES, TERMINAL_RUN_STATUSES, TaskRun, TaskRunStatus
 from app.models.user import User, UserRole
 from app.schemas.run import TaskRunRead
@@ -16,6 +17,23 @@ from app.services.file_service import build_run_output_dir, list_output_files_fo
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _is_terminal(run: TaskRun) -> bool:
+    return run.status in TERMINAL_RUN_STATUSES
+
+
+def _raw_payload_summary(db: Session, run_id: int) -> list[dict[str, object]]:
+    rows = db.execute(
+        select(Message.role, Message.raw_payload)
+        .where(Message.run_id == run_id)
+        .where(Message.raw_payload.is_not(None))
+        .order_by(Message.id.asc())
+    ).all()
+    return [
+        {"role": role.value if hasattr(role, "value") else str(role), "raw_payload": raw_payload}
+        for role, raw_payload in rows
+    ]
 
 
 def _to_read(db: Session, run: TaskRun, agent: Agent | None = None) -> TaskRunRead:
@@ -35,6 +53,7 @@ def _to_read(db: Session, run: TaskRun, agent: Agent | None = None) -> TaskRunRe
         output_text=run.output_text,
         output_dir=run.output_dir,
         output_files_json=run.output_files_json,
+        raw_payload_summary=_raw_payload_summary(db, run.id),
         error_message=run.error_message,
         queued_at=run.queued_at,
         started_at=run.started_at,
@@ -62,7 +81,7 @@ def create_task_run(
     timeout_seconds = (
         settings.task_job_timeout_seconds
         if run_type == "job"
-        else settings.task_chat_timeout_seconds
+        else settings.task_short_chat_timeout_seconds
     )
     now = _utc_now()
     run = TaskRun(
@@ -87,6 +106,8 @@ def create_task_run(
 
 
 def mark_task_run_queued(db: Session, run: TaskRun) -> TaskRun:
+    if _is_terminal(run):
+        return run
     run.status = TaskRunStatus.queued
     run.queued_at = run.queued_at or _utc_now()
     run.cancel_requested = False
@@ -96,15 +117,20 @@ def mark_task_run_queued(db: Session, run: TaskRun) -> TaskRun:
 
 
 def mark_task_run_running(db: Session, run: TaskRun) -> TaskRun:
+    if _is_terminal(run):
+        return run
     run.status = TaskRunStatus.running
     run.started_at = run.started_at or _utc_now()
     run.heartbeat_at = _utc_now()
+    run.error_message = None
     db.commit()
     db.refresh(run)
     return run
 
 
 def touch_task_run_heartbeat(db: Session, run: TaskRun) -> TaskRun:
+    if _is_terminal(run):
+        return run
     run.heartbeat_at = _utc_now()
     db.commit()
     db.refresh(run)
@@ -118,10 +144,13 @@ def mark_task_run_success(
     output_text: str,
     output_dir: str | None = None,
 ) -> TaskRun:
+    if _is_terminal(run):
+        return run
     run.status = TaskRunStatus.success
     run.output_text = output_text
     if output_dir:
         run.output_dir = output_dir
+    run.error_message = None
     run.cancel_requested = False
     run.finished_at = _utc_now()
     db.commit()
@@ -136,6 +165,8 @@ def mark_task_run_failed(
     output_text: str | None = None,
     status_value: TaskRunStatus = TaskRunStatus.failed,
 ) -> TaskRun:
+    if _is_terminal(run):
+        return run
     run.status = status_value
     run.error_message = error_message
     if output_text is not None:
@@ -153,6 +184,8 @@ def mark_task_run_cancelled(
     message: str | None = None,
     output_text: str | None = None,
 ) -> TaskRun:
+    if _is_terminal(run):
+        return run
     run.status = TaskRunStatus.cancelled
     run.error_message = message
     if output_text is not None:
@@ -190,8 +223,6 @@ def request_task_run_cancel(db: Session, current_user: User, run_id: int) -> Tas
     if current_user.role != UserRole.admin and run.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found")
 
-    if run.status == TaskRunStatus.stale:
-        return mark_task_run_cancelled(db, run, "用户已停止 stale 任务")
     if run.status in TERMINAL_RUN_STATUSES:
         return run
     if run.status in {TaskRunStatus.pending, TaskRunStatus.queued}:
