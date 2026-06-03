@@ -183,21 +183,25 @@ onMounted(async () => {
                 <strong>输入</strong>
                 <pre>{{ row.input_text }}</pre>
               </div>
-              <div v-if="row.output_text">
+              <div>
                 <strong>输出</strong>
-                <pre>{{ row.output_text }}</pre>
+                <pre>{{ row.output_text || '-' }}</pre>
               </div>
               <div v-if="row.error_message">
                 <strong>错误</strong>
                 <pre>{{ row.error_message }}</pre>
               </div>
+              <div>
+                <strong>run raw_payload</strong>
+                <pre>{{ row.raw_payload ? JSON.stringify(row.raw_payload, null, 2) : '-' }}</pre>
+              </div>
               <div v-if="row.raw_payload_summary">
                 <strong>raw_payload 摘要</strong>
                 <pre>{{ JSON.stringify(row.raw_payload_summary, null, 2) }}</pre>
               </div>
-              <div v-if="row.output_files_json">
+              <div>
                 <strong>输出文件快照</strong>
-                <pre>{{ JSON.stringify(row.output_files_json, null, 2) }}</pre>
+                <pre>{{ row.output_files_json ? JSON.stringify(row.output_files_json, null, 2) : '-' }}</pre>
               </div>
             </div>
           </template>

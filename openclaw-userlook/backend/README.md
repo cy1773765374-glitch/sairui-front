@@ -39,9 +39,10 @@ For existing Phase 10 databases, run the Phase 11 idempotent migration after `ap
 
 ```bash
 python -m app.migrations.phase11_task_run_lifecycle
+python -m app.migrations.phase12_streaming_persistence
 ```
 
-The migration adds task lifecycle fields and `messages.run_id`, expands `task_runs.status`, and is safe to run repeatedly. It does not delete existing data.
+The migrations add task lifecycle fields, `messages.run_id`, and `task_runs.raw_payload`, expand `task_runs.status`, and are safe to run repeatedly. They do not delete existing data.
 
 Preset Agents can also be initialized independently:
 
@@ -178,7 +179,11 @@ The browser only connects to:
 WS /api/ws/conversations/{conversation_id}?token={JWT}
 ```
 
-`ws_chat.py` validates uploaded `file_ids`, creates a queued `task_runs` row, saves the user message with `run_id`, records `audit_logs.action=agent.invoke`, then hands execution to the in-process task executor. The executor owns its own SQLAlchemy session, streams through `OpenClawAdapter`, persists the assistant message with `run_id`, and always moves the run to a terminal status. Task status events include `run_id`, and completed runs scan `USER_OUTPUT_ROOT/{user_id}/{yyyyMMdd}/run_{run_id}` for supported output files.
+`ws_chat.py` validates uploaded `file_ids`, creates a queued `task_runs` row, saves the user message with `run_id`, records `audit_logs.action=agent.invoke`, then hands execution to the in-process task executor. The executor owns its own SQLAlchemy session, streams through `OpenClawAdapter`, incrementally persists `task_runs.output_text`, upserts one assistant message for the same `run_id`, and always moves the run to a terminal status. Task status events include `conversation_id` and `run_id`, and completed runs scan `USER_OUTPUT_ROOT/{user_id}/{yyyyMMdd}/run_{run_id}` for supported output files.
+
+WebSocket is only the realtime display channel. Final chat content and run status are recovered from `task_runs.output_text`, `task_runs.raw_payload`, and the assistant row in `messages`. If a page refreshes or the user switches Agents while a run is active, the frontend reloads `messages` and `ConversationDetail.active_run.output_text` to restore the visible assistant reply.
+
+For short chat runs, if Gateway emits assistant text but does not send an explicit done event, the backend can mark the run `success` after `TASK_GATEWAY_FINAL_SILENCE_SECONDS` seconds of text silence when `TASK_ASSUME_DONE_AFTER_TEXT_SILENCE=true`.
 
 The current chat queue follows the OpenClaw Feishu/Lark plugin scheduling model only as a reference: FastAPI keeps a process-level queue, serializes tasks by `conversation_id`, and allows different conversations or different Agents to run concurrently. `TASK_GLOBAL_CHAT_CONCURRENCY` is only a global concurrency guard; it is not a global serial queue.
 

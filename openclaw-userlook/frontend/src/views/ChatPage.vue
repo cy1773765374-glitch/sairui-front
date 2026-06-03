@@ -19,8 +19,8 @@ import { cancelRun, fetchRun, isActiveRunStatus, type TaskRun, type TaskRunStatu
 import ChatWindow from '../components/ChatWindow.vue'
 
 type ServerWsMessage =
-  | { type: 'assistant_delta'; content: string }
-  | { type: 'assistant_done'; message_id: number; run_id?: number; output_files?: UserFile[] }
+  | { type: 'assistant_delta'; conversation_id?: number; run_id?: number; message_id?: number | null; content: string }
+  | { type: 'assistant_done'; conversation_id?: number; message_id: number; run_id?: number; output_files?: UserFile[] }
   | {
       type: 'run_status'
       run_id?: number
@@ -35,7 +35,7 @@ type ServerWsMessage =
 
 interface ConversationRuntimeState {
   sending: boolean
-  activeAssistantMessageId: string | null
+  activeAssistantMessageId: string | number | null
   outputFiles: UserFile[]
   currentRunId: number | null
   currentRunStatus: TaskRunStatus | ''
@@ -53,6 +53,8 @@ const conversations = ref<Conversation[]>([])
 const agent = ref<Agent | null>(null)
 const conversation = ref<Conversation | null>(null)
 const messages = ref<LocalMessage[]>([])
+const messagesByConversation = ref<Record<number, LocalMessage[]>>({})
+const activeRunByConversation = ref<Record<number, TaskRun | null>>({})
 const errorMessage = ref('')
 const attachedFiles = ref<UserFile[]>([])
 const deletingConversationId = ref<number | null>(null)
@@ -98,7 +100,7 @@ const sending = computed({
 
 const activeAssistantMessageId = computed({
   get: () => activeRuntime.value.activeAssistantMessageId,
-  set: (value: string | null) => {
+  set: (value: string | number | null) => {
     activeRuntime.value.activeAssistantMessageId = value
   },
 })
@@ -149,6 +151,20 @@ function getRuntimeForConversation(conversationId: number) {
   return runtimeByConversation.value[conversationId]
 }
 
+function getMessagesForConversation(conversationId: number) {
+  if (!messagesByConversation.value[conversationId]) {
+    messagesByConversation.value[conversationId] = []
+  }
+  return messagesByConversation.value[conversationId]
+}
+
+function setMessagesForConversation(conversationId: number, nextMessages: LocalMessage[]) {
+  messagesByConversation.value[conversationId] = nextMessages
+  if (conversation.value?.id === conversationId) {
+    messages.value = messagesByConversation.value[conversationId]
+  }
+}
+
 function riskTagType(riskLevel?: AgentRiskLevel) {
   if (riskLevel === 'high') {
     return 'danger'
@@ -159,13 +175,44 @@ function riskTagType(riskLevel?: AgentRiskLevel) {
   return 'success'
 }
 
-function normalizeMessages(serverMessages: Awaited<ReturnType<typeof fetchConversation>>['messages']) {
-  messages.value = serverMessages.map((message) => ({ ...message, streaming: false }))
+function normalizeMessages(
+  conversationId: number,
+  serverMessages: Awaited<ReturnType<typeof fetchConversation>>['messages'],
+  activeRun: TaskRun | null,
+) {
+  const normalized: LocalMessage[] = serverMessages.map((message) => ({ ...message, streaming: false }))
+  const runtime = getRuntimeForConversation(conversationId)
+  if (activeRun) {
+    const assistantMessage = normalized.find(
+      (message) => message.role === 'assistant' && message.run_id === activeRun.id,
+    )
+    if (assistantMessage) {
+      assistantMessage.streaming = isActiveRunStatus(activeRun.status)
+      runtime.activeAssistantMessageId = isActiveRunStatus(activeRun.status) ? assistantMessage.id : null
+    } else if (activeRun.output_text) {
+      const temporaryId = `assistant-run-${activeRun.id}`
+      normalized.push({
+        id: temporaryId,
+        conversation_id: conversationId,
+        run_id: activeRun.id,
+        role: 'assistant',
+        content: activeRun.output_text,
+        created_at: activeRun.started_at || new Date().toISOString(),
+        raw_payload: null,
+        streaming: isActiveRunStatus(activeRun.status),
+      })
+      runtime.activeAssistantMessageId = isActiveRunStatus(activeRun.status) ? temporaryId : null
+    }
+  }
+  setMessagesForConversation(conversationId, normalized)
 }
 
 function applyRunState(run: TaskRun | null) {
   const runtime =
     run?.conversation_id ? getRuntimeForConversation(run.conversation_id) : activeRuntime.value
+  if (run?.conversation_id) {
+    activeRunByConversation.value[run.conversation_id] = run
+  }
   runtime.currentRunId = run?.id ?? null
   runtime.currentRunStatus = run?.status ?? ''
   runtime.currentRunStatusMessage = run?.error_message ?? ''
@@ -217,10 +264,12 @@ async function loadHistory(
     return null
   }
   conversation.value = detail
-  normalizeMessages(detail.messages)
+  activeRunByConversation.value[detail.id] = detail.active_run
+  normalizeMessages(detail.id, detail.messages, detail.active_run)
   if (detail.active_run) {
     applyRunState(detail.active_run)
   } else {
+    activeRunByConversation.value[detail.id] = null
     resetConversationRuntimeState(detail.id)
   }
   return detail
@@ -240,6 +289,27 @@ function isCurrentSocket(currentSocket: WebSocket, conversationId: number) {
     socketConversationId === conversationId &&
     conversation.value?.id === conversationId
   )
+}
+
+function isPayloadForConversation(payload: { conversation_id?: number; run_id?: number }, conversationId: number) {
+  if (payload.conversation_id !== undefined && payload.conversation_id !== conversationId) {
+    return false
+  }
+  const runtime = getRuntimeForConversation(conversationId)
+  if (payload.run_id !== undefined && runtime.currentRunId !== null && payload.run_id !== runtime.currentRunId) {
+    return false
+  }
+  return true
+}
+
+function findAssistantMessage(conversationId: number, messageId: string | number | null, runId?: number) {
+  const list = getMessagesForConversation(conversationId)
+  return list.find((message) => {
+    if (messageId !== null && message.id === messageId) {
+      return true
+    }
+    return runId !== undefined && message.role === 'assistant' && message.run_id === runId
+  })
 }
 
 function scheduleReconnect(conversationId: number) {
@@ -351,31 +421,39 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
     }
 
     if (payload.type === 'assistant_delta') {
-      if (!isCurrentSocket(nextSocket, conversationId)) {
+      if (!isCurrentSocket(nextSocket, conversationId) || !isPayloadForConversation(payload, conversationId)) {
         return
       }
       errorMessage.value = ''
-      if (!activeAssistantMessageId.value) {
-        activeAssistantMessageId.value = `assistant-${Date.now()}`
-        messages.value.push({
-          id: activeAssistantMessageId.value,
-          run_id: currentRunId.value,
+      const runtime = getRuntimeForConversation(conversationId)
+      currentRunId.value = payload.run_id ?? currentRunId.value
+      let target = findAssistantMessage(conversationId, runtime.activeAssistantMessageId, payload.run_id)
+      if (!target) {
+        runtime.activeAssistantMessageId = payload.message_id ?? `assistant-run-${payload.run_id ?? Date.now()}`
+        target = {
+          id: runtime.activeAssistantMessageId,
+          conversation_id: conversationId,
+          run_id: payload.run_id ?? currentRunId.value,
           role: 'assistant',
           content: '',
           created_at: new Date().toISOString(),
+          raw_payload: null,
           streaming: true,
-        })
+        }
+        getMessagesForConversation(conversationId).push(target)
       }
 
-      const target = messages.value.find((message) => message.id === activeAssistantMessageId.value)
-      if (target) {
-        target.content += payload.content
+      target.content += payload.content
+      target.streaming = true
+      if (payload.message_id) {
+        target.id = payload.message_id
+        runtime.activeAssistantMessageId = payload.message_id
       }
       return
     }
 
     if (payload.type === 'run_status') {
-      if (!isCurrentSocket(nextSocket, conversationId)) {
+      if (!isCurrentSocket(nextSocket, conversationId) || !isPayloadForConversation(payload, conversationId)) {
         return
       }
       currentRunId.value = payload.run_id ?? currentRunId.value
@@ -387,7 +465,7 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       }
       sending.value = isActiveRunStatus(currentRunStatus.value)
       if (!sending.value) {
-        const target = messages.value.find((message) => message.id === activeAssistantMessageId.value)
+        const target = findAssistantMessage(conversationId, activeAssistantMessageId.value, currentRunId.value ?? undefined)
         if (target) {
           target.streaming = false
         }
@@ -405,14 +483,14 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
     }
 
     if (payload.type === 'assistant_done') {
-      if (!isCurrentSocket(nextSocket, conversationId)) {
+      if (!isCurrentSocket(nextSocket, conversationId) || !isPayloadForConversation(payload, conversationId)) {
         return
       }
       currentRunId.value = payload.run_id ?? currentRunId.value
       if (payload.output_files) {
         outputFiles.value = payload.output_files
       }
-      const target = messages.value.find((message) => message.id === activeAssistantMessageId.value)
+      const target = findAssistantMessage(conversationId, activeAssistantMessageId.value, payload.run_id)
       if (target) {
         target.id = payload.message_id
         target.streaming = false
@@ -450,7 +528,7 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
     }
     errorMessage.value = payload.message
     ElMessage.error(payload.message)
-    const target = messages.value.find((message) => message.id === activeAssistantMessageId.value)
+    const target = findAssistantMessage(conversationId, activeAssistantMessageId.value, currentRunId.value ?? undefined)
     if (target) {
       target.streaming = false
     }
@@ -547,6 +625,7 @@ async function selectAgent(nextAgent: Agent) {
   closeActiveSocket()
   conversation.value = null
   resetConversationRuntimeState()
+  messages.value = []
   if (String(route.params.agentCode) === nextAgent.code) {
     await initializeAgent(nextAgent.code)
     return
@@ -620,6 +699,9 @@ async function deleteHistoryConversation(nextConversation: Conversation) {
   deletingConversationId.value = nextConversation.id
   try {
     await deleteConversation(nextConversation.id)
+    delete messagesByConversation.value[nextConversation.id]
+    delete runtimeByConversation.value[nextConversation.id]
+    delete activeRunByConversation.value[nextConversation.id]
     const remainingConversations = conversations.value.filter((item) => item.id !== nextConversation.id)
     conversations.value = remainingConversations
     ElMessage.success('历史对话已删除')
@@ -699,7 +781,7 @@ async function sendMessage(content: string, fileIds: number[]) {
   errorMessage.value = ''
   outputFiles.value = []
   currentRunStatusMessage.value = ''
-  messages.value.push({
+  getMessagesForConversation(conversation.value.id).push({
     id: `user-${Date.now()}`,
     conversation_id: conversation.value.id,
     run_id: null,
@@ -709,6 +791,7 @@ async function sendMessage(content: string, fileIds: number[]) {
     raw_payload: { file_ids: fileIds },
     streaming: false,
   })
+  messages.value = getMessagesForConversation(conversation.value.id)
 
   try {
     socket.send(
@@ -740,7 +823,7 @@ async function stopCurrentRun() {
     }
     applyRunState(run)
     if (!isActiveRunStatus(run.status)) {
-      const target = messages.value.find((message) => message.id === activeAssistantMessageId.value)
+      const target = findAssistantMessage(conversationId, activeAssistantMessageId.value, runId)
       if (target) {
         target.streaming = false
       }

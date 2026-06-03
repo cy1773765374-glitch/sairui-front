@@ -64,6 +64,7 @@ class TaskRun(Base):
     output_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     output_dir: Mapped[str | None] = mapped_column(String(500), nullable=True)
     output_files_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    raw_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
