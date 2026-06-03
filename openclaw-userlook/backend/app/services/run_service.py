@@ -38,7 +38,13 @@ def _raw_payload_summary(db: Session, run_id: int) -> list[dict[str, object]]:
     ]
 
 
-def _to_read(db: Session, run: TaskRun, agent: Agent | None = None) -> TaskRunRead:
+def _to_read(
+    db: Session,
+    run: TaskRun,
+    agent: Agent | None = None,
+    *,
+    include_details: bool = True,
+) -> TaskRunRead:
     if agent is None:
         agent = db.get(Agent, run.agent_id)
     return TaskRunRead(
@@ -57,7 +63,7 @@ def _to_read(db: Session, run: TaskRun, agent: Agent | None = None) -> TaskRunRe
         output_dir=run.output_dir,
         output_files_json=run.output_files_json,
         raw_payload=run.raw_payload,
-        raw_payload_summary=_raw_payload_summary(db, run.id),
+        raw_payload_summary=_raw_payload_summary(db, run.id) if include_details else None,
         client_message_id=run.client_message_id,
         gateway_session_key=run.gateway_session_key,
         idempotency_key=run.idempotency_key,
@@ -70,7 +76,7 @@ def _to_read(db: Session, run: TaskRun, agent: Agent | None = None) -> TaskRunRe
         timeout_seconds=run.timeout_seconds,
         created_at=run.created_at,
         updated_at=run.updated_at,
-        output_files=list_output_files_for_dir(db, run.user_id, run.output_dir),
+        output_files=list_output_files_for_dir(db, run.user_id, run.output_dir) if include_details else [],
     )
 
 
@@ -381,7 +387,7 @@ def list_task_runs(
         statement = statement.where(TaskRun.run_type == run_type)
     if active_only:
         statement = statement.where(TaskRun.status.in_(ACTIVE_RUN_STATUSES))
-    return [_to_read(db, run, agent) for run, agent in db.execute(statement).all()]
+    return [_to_read(db, run, agent, include_details=False) for run, agent in db.execute(statement).all()]
 
 
 def get_task_run_detail(db: Session, current_user: User, run_id: int) -> TaskRunRead:

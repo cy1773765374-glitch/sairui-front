@@ -12,6 +12,7 @@ from app.models.message import Message, MessageRole
 from app.models.task_run import TaskRun, TaskRunStatus
 from app.models.user import User, UserRole, UserStatus
 from app.services.openclaw_adapter import OpenClawAdapterEvent
+from app.services.run_service import list_task_runs
 from app.services.task_executor import _finish_success, execute_chat_run
 
 
@@ -117,6 +118,58 @@ class TaskExecutorFinishSuccessTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(saved_run.raw_payload["assistant_message_id"], assistant_messages[0].id)
 
             self.assertEqual(broadcast.await_count, 2)
+
+    async def test_list_task_runs_uses_lightweight_payload(self) -> None:
+        engine = create_engine("sqlite:///:memory:", future=True)
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+        with session_factory() as db:
+            user = User(
+                id=7,
+                username="alice",
+                password_hash="x",
+                display_name="Alice",
+                status=UserStatus.active,
+                role=UserRole.user,
+            )
+            agent = Agent(
+                id=3,
+                code="mysql",
+                name="MySQL Agent",
+                openclaw_agent_id="mysql-analysis",
+                risk_level=AgentRiskLevel.low,
+            )
+            conversation = Conversation(
+                id=11,
+                user_id=user.id,
+                agent_id=agent.id,
+                title="MySQL",
+                session_key="web:7:mysql:11",
+            )
+            run = TaskRun(
+                id=59,
+                user_id=user.id,
+                agent_id=agent.id,
+                conversation_id=conversation.id,
+                input_text="who are you",
+                run_type="chat",
+                priority=100,
+                status=TaskRunStatus.timeout,
+                output_dir="/tmp/openclaw-userlook/outputs/7/20260603/run_59",
+                raw_payload={"status": "timeout", "gateway_debug_events": [{"classification": "outbound_request"}]},
+            )
+            db.add_all([user, agent, conversation, run])
+            db.commit()
+
+            with patch("app.services.run_service.list_output_files_for_dir") as list_files:
+                rows = list_task_runs(db, user)
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].raw_payload["status"], "timeout")
+            self.assertIsNone(rows[0].raw_payload_summary)
+            self.assertEqual(rows[0].output_files, [])
+            list_files.assert_not_called()
 
     async def test_execute_chat_run_persists_timeout_debug_payload_without_output(self) -> None:
         engine = create_engine("sqlite:///:memory:", future=True)
