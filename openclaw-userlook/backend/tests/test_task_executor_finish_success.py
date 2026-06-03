@@ -167,6 +167,8 @@ class TaskExecutorFinishSuccessTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0].raw_payload["status"], "timeout")
+            self.assertNotIn("gateway_debug_events", rows[0].raw_payload)
+            self.assertEqual(rows[0].raw_payload["gateway_debug_event_count"], 1)
             self.assertIsNone(rows[0].raw_payload_summary)
             self.assertEqual(rows[0].output_files, [])
             list_files.assert_not_called()

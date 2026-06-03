@@ -192,7 +192,7 @@ onMounted(async () => {
                 <pre>{{ row.error_message }}</pre>
               </div>
               <div>
-                <strong>run raw_payload</strong>
+                <strong>run raw_payload 轻量摘要</strong>
                 <pre>{{ row.raw_payload ? JSON.stringify(row.raw_payload, null, 2) : '-' }}</pre>
               </div>
               <div v-if="row.raw_payload_summary">
