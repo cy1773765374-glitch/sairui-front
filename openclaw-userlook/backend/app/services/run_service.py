@@ -16,6 +16,29 @@ from app.models.user import User, UserRole
 from app.schemas.run import TaskRunRead
 from app.services.file_service import build_run_output_dir, list_output_files_for_dir
 
+RAW_PAYLOAD_COMPACT_KEYS = (
+    "status",
+    "mock",
+    "streaming",
+    "timeout",
+    "cancelled",
+    "partial",
+    "agent_code",
+    "openclaw_agent_id",
+    "conversation_id",
+    "run_id",
+    "client_message_id",
+    "gateway_session_key",
+    "idempotency_key",
+    "gateway_terminal_status",
+    "terminal_event_received",
+    "assumed_done_after_text_silence",
+    "first_token_at",
+    "last_delta_at",
+    "chunk_count",
+    "assistant_message_id",
+)
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -36,6 +59,65 @@ def _raw_payload_summary(db: Session, run_id: int) -> list[dict[str, object]]:
         {"role": role.value if hasattr(role, "value") else str(role), "raw_payload": raw_payload}
         for role, raw_payload in rows
     ]
+
+
+def _compact_gateway_request(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    compact: dict[str, object] = {}
+    if value.get("method"):
+        compact["method"] = value["method"]
+    params = value.get("params")
+    if isinstance(params, dict):
+        compact_params = {
+            key: params[key]
+            for key in ("sessionKey", "deliver", "timeoutMs", "idempotencyKey")
+            if key in params
+        }
+        attachment_count = len(params.get("attachments") or []) if isinstance(params.get("attachments"), list) else 0
+        if attachment_count:
+            compact_params["attachment_count"] = attachment_count
+        if compact_params:
+            compact["params"] = compact_params
+    return compact or None
+
+
+def _compact_gateway_event(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    compact = {
+        key: value[key]
+        for key in ("id", "type", "event", "status", "runId", "clientMessageId")
+        if key in value
+    }
+    return compact or None
+
+
+def _compact_raw_payload(raw_payload: object) -> object | None:
+    if not isinstance(raw_payload, dict):
+        return raw_payload
+
+    compact: dict[str, object] = {
+        key: raw_payload[key]
+        for key in RAW_PAYLOAD_COMPACT_KEYS
+        if key in raw_payload
+    }
+    gateway_request = _compact_gateway_request(raw_payload.get("gateway_request"))
+    if gateway_request:
+        compact["gateway_request"] = gateway_request
+    gateway_event = _compact_gateway_event(raw_payload.get("gateway_event"))
+    if gateway_event:
+        compact["gateway_event"] = gateway_event
+
+    debug_events = raw_payload.get("gateway_debug_events")
+    if isinstance(debug_events, list):
+        compact["gateway_debug_event_count"] = len(debug_events)
+        compact["gateway_debug_event_classes"] = [
+            item.get("classification")
+            for item in debug_events
+            if isinstance(item, dict) and item.get("classification")
+        ][:12]
+    return compact or None
 
 
 def _to_read(
@@ -62,7 +144,7 @@ def _to_read(
         output_text=run.output_text,
         output_dir=run.output_dir,
         output_files_json=run.output_files_json,
-        raw_payload=run.raw_payload,
+        raw_payload=run.raw_payload if include_details else _compact_raw_payload(run.raw_payload),
         raw_payload_summary=_raw_payload_summary(db, run.id) if include_details else None,
         client_message_id=run.client_message_id,
         gateway_session_key=run.gateway_session_key,

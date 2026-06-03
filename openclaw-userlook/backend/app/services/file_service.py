@@ -60,6 +60,8 @@ ALLOWED_EXTENSIONS = {
 
 SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._ -]+")
 CHUNK_SIZE = 1024 * 1024
+INVALID_FILE_IDS_DETAIL = "上传文件记录无效，请重新上传后再发送"
+MISSING_UPLOAD_FILE_DETAIL = "上传文件已失效，请重新上传后再发送"
 
 
 def _resolve_root(root: str) -> Path:
@@ -131,7 +133,7 @@ def validate_user_upload_file_ids(db: Session, current_user: User, file_ids: lis
     if owned_file_ids != unique_file_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="invalid file_ids",
+            detail=INVALID_FILE_IDS_DETAIL,
         )
 
 
@@ -155,7 +157,7 @@ def list_gateway_upload_files(db: Session, current_user: User, file_ids: list[in
     if set(files_by_id) != set(unique_file_ids):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="invalid file_ids",
+            detail=INVALID_FILE_IDS_DETAIL,
         )
 
     gateway_files: list[dict[str, object]] = []
@@ -165,7 +167,7 @@ def list_gateway_upload_files(db: Session, current_user: User, file_ids: list[in
         if not _is_relative_to(stored_path, root) or not stored_path.is_file():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="invalid file_ids",
+                detail=MISSING_UPLOAD_FILE_DETAIL,
             )
         gateway_files.append(
             {

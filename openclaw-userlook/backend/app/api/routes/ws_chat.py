@@ -215,8 +215,17 @@ async def chat_websocket(
                         current_user,
                         inbound_message.file_ids,
                     )
-                except HTTPException:
-                    await send_json({"type": "error", "message": "invalid file_ids"})
+                except HTTPException as exc:
+                    detail = exc.detail if isinstance(exc.detail, str) else "上传文件无效，请重新上传后再发送"
+                    await send_json(
+                        {
+                            "type": "error",
+                            "code": "invalid_file_ids",
+                            "message": detail,
+                            "conversation_id": conversation.id,
+                            "client_message_id": client_message_id,
+                        }
+                    )
                     continue
 
                 provisional_identity = build_gateway_session_identity(

@@ -59,7 +59,14 @@ type ServerWsMessage =
       output_files?: UserFile[]
     }
   | { type: 'active_run'; conversation_id?: number; client_message_id?: string | null; message?: string; active_run: TaskRun | null }
-  | { type: 'error'; conversation_id?: number; run_id?: number; client_message_id?: string | null; message: string }
+  | {
+      type: 'error'
+      code?: string
+      conversation_id?: number
+      run_id?: number
+      client_message_id?: string | null
+      message: string
+    }
 
 interface ConversationRuntimeState {
   sending: boolean
@@ -443,6 +450,16 @@ function findAssistantMessage(conversationId: number, messageId: string | number
   })
 }
 
+function removeOptimisticUserMessage(conversationId: number, clientMessageId: string | null | undefined) {
+  if (!clientMessageId) {
+    return
+  }
+  setMessagesForConversation(
+    conversationId,
+    getMessagesForConversation(conversationId).filter((message) => message.id !== `user-${clientMessageId}`),
+  )
+}
+
 function scheduleReconnect(conversationId: number) {
   if (conversation.value?.id !== conversationId || unmounted) {
     return
@@ -686,6 +703,10 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
 
     if (!isCurrentSocket(nextSocket, conversationId)) {
       return
+    }
+    if (payload.code === 'invalid_file_ids' || payload.message === 'invalid file_ids') {
+      attachedFiles.value = []
+      removeOptimisticUserMessage(conversationId, payload.client_message_id)
     }
     errorMessage.value = payload.message
     ElMessage.error(payload.message)
