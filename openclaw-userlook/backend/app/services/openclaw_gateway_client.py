@@ -534,28 +534,10 @@ class OpenClawGatewayClient:
         )
         params: dict[str, Any] = {
             "sessionKey": session_key,
-            "agentId": identity.openclaw_agent_id,
-            "channel": identity.channel,
-            "conversationId": conversation.id,
-            "runId": run_id,
-            "clientMessageId": identity.client_message_id,
-            "idempotencyKey": effective_idempotency_key,
             "message": message,
             "deliver": False,
             "timeoutMs": self.timeout_seconds * 1000,
-            "metadata": {
-                "source": "openclaw-userlook",
-                "agent_code": agent.code,
-                "openclaw_agent_id": identity.openclaw_agent_id,
-                "user_id": user.id,
-                "conversation_id": conversation.id,
-                "run_id": run_id,
-                "client_message_id": identity.client_message_id,
-            },
-            "context": {
-                "sessionKey": session_key,
-                "idempotencyKey": effective_idempotency_key,
-            },
+            "idempotencyKey": effective_idempotency_key,
         }
         attachments = self._build_attachments(files)
         if attachments:
