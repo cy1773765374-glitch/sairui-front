@@ -33,6 +33,7 @@ export interface TaskRun {
   output_text: string | null
   output_dir: string | null
   output_files_json: unknown | null
+  raw_payload_summary: unknown | null
   error_message: string | null
   queued_at: string | null
   started_at: string | null

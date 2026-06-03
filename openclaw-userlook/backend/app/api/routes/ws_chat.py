@@ -1,6 +1,7 @@
 import json
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi.encoders import jsonable_encoder
 from jose import JWTError
 from pydantic import ValidationError
 
@@ -18,7 +19,7 @@ from app.services.file_service import list_gateway_upload_files, validate_user_u
 from app.services.run_service import (
     create_task_run,
     get_task_run_detail,
-    has_active_run_for_conversation,
+    get_latest_active_run_for_conversation,
     request_task_run_cancel,
 )
 from app.services.task_executor import start_chat_run
@@ -129,6 +130,7 @@ async def chat_websocket(
                         {
                             "type": "run_status",
                             "run_id": run_read.id,
+                            "conversation_id": run_read.conversation_id,
                             "status": run_read.status.value,
                             "message": run_read.error_message,
                         }
@@ -141,8 +143,15 @@ async def chat_websocket(
                     await send_json({"type": "error", "message": "invalid message format"})
                     continue
 
-                if has_active_run_for_conversation(db, current_user, conversation.id):
-                    await send_json({"type": "error", "message": "当前会话已有任务正在运行"})
+                active_run = get_latest_active_run_for_conversation(db, current_user, conversation.id)
+                if active_run is not None or task_queue.has_active_task(conversation.id):
+                    await send_json(
+                        {
+                            "type": "active_run",
+                            "message": "当前会话已有任务正在运行",
+                            "active_run": jsonable_encoder(active_run) if active_run else None,
+                        }
+                    )
                     continue
 
                 try:
@@ -185,8 +194,7 @@ async def chat_websocket(
                     user_agent=websocket.headers.get("user-agent"),
                 )
 
-                await send_json({"type": "run_status", "run_id": task_run.id, "status": "queued"})
-                await start_chat_run(
+                queue_status = await start_chat_run(
                     run_id=task_run.id,
                     user_id=current_user.id,
                     agent_id=agent.id,
@@ -194,6 +202,15 @@ async def chat_websocket(
                     content=inbound_message.content,
                     file_ids=inbound_message.file_ids,
                     gateway_files=gateway_files,
+                )
+                await send_json(
+                    {
+                        "type": "run_status",
+                        "run_id": task_run.id,
+                        "conversation_id": conversation.id,
+                        "queue_status": queue_status,
+                        "status": "queued",
+                    }
                 )
         except WebSocketDisconnect:
             connection_manager.disconnect(conversation.id, websocket)

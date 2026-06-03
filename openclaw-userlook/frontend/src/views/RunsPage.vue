@@ -86,6 +86,41 @@ function isRunWarning(row: TaskRun) {
   return Date.now() - heartbeat > 5 * 60 * 1000
 }
 
+function formatDurationMs(ms: number | null) {
+  if (ms === null || ms < 0) {
+    return '-'
+  }
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) {
+    return `${seconds}s`
+  }
+  const minutes = Math.floor(seconds / 60)
+  const restSeconds = seconds % 60
+  if (minutes < 60) {
+    return `${minutes}m ${restSeconds}s`
+  }
+  const hours = Math.floor(minutes / 60)
+  const restMinutes = minutes % 60
+  return `${hours}h ${restMinutes}m`
+}
+
+function elapsedBetween(start: string | null | undefined, end: string | null | undefined) {
+  const startTime = parseBackendTime(start)
+  const endTime = parseBackendTime(end)
+  if (startTime === null || endTime === null) {
+    return '-'
+  }
+  return formatDurationMs(endTime - startTime)
+}
+
+function queueDuration(row: TaskRun) {
+  return elapsedBetween(row.queued_at || row.created_at, row.started_at)
+}
+
+function runDuration(row: TaskRun) {
+  return elapsedBetween(row.started_at, row.finished_at)
+}
+
 function resetFilters() {
   filters.value = {
     status: '',
@@ -156,6 +191,10 @@ onMounted(async () => {
                 <strong>错误</strong>
                 <pre>{{ row.error_message }}</pre>
               </div>
+              <div v-if="row.raw_payload_summary">
+                <strong>raw_payload 摘要</strong>
+                <pre>{{ JSON.stringify(row.raw_payload_summary, null, 2) }}</pre>
+              </div>
               <div v-if="row.output_files_json">
                 <strong>输出文件快照</strong>
                 <pre>{{ JSON.stringify(row.output_files_json, null, 2) }}</pre>
@@ -182,6 +221,16 @@ onMounted(async () => {
         <el-table-column prop="created_at" label="created_at" min-width="180" />
         <el-table-column prop="queued_at" label="queued_at" min-width="180" />
         <el-table-column prop="started_at" label="started_at" min-width="180" />
+        <el-table-column label="排队耗时" width="110">
+          <template #default="{ row }">
+            {{ queueDuration(row) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="执行耗时" width="110">
+          <template #default="{ row }">
+            {{ runDuration(row) }}
+          </template>
+        </el-table-column>
         <el-table-column prop="heartbeat_at" label="heartbeat_at" min-width="180" />
         <el-table-column prop="finished_at" label="finished_at" min-width="180" />
         <el-table-column prop="timeout_seconds" label="timeout" width="100" />

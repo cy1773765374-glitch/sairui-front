@@ -56,9 +56,12 @@ class OpenClawAdapter:
         files: list[dict[str, object]] | None = None,
         run_id: int | None = None,
         output_dir: str | None = None,
+        cancel_event: asyncio.Event | None = None,
+        assume_done_after_text_silence: bool = False,
+        final_silence_seconds: int | None = None,
     ) -> AsyncIterator[OpenClawAdapterEvent]:
         if self.settings.mock_openclaw:
-            async for event in self._mock_stream(content):
+            async for event in self._mock_stream(content, cancel_event=cancel_event):
                 yield event
             return
         if (
@@ -78,6 +81,9 @@ class OpenClawAdapter:
                 files=files,
                 run_id=run_id,
                 output_dir=output_dir,
+                cancel_event=cancel_event,
+                assume_done_after_text_silence=assume_done_after_text_silence,
+                final_silence_seconds=final_silence_seconds,
             ):
                 yield OpenClawAdapterEvent(
                     type=event.type,
@@ -90,9 +96,18 @@ class OpenClawAdapter:
             message = str(exc) or GATEWAY_UNAVAILABLE_MESSAGE
             yield OpenClawAdapterEvent(type="error", content=message)
 
-    async def _mock_stream(self, content: str) -> AsyncIterator[OpenClawAdapterEvent]:
+    async def _mock_stream(
+        self,
+        content: str,
+        *,
+        cancel_event: asyncio.Event | None = None,
+    ) -> AsyncIterator[OpenClawAdapterEvent]:
         yield OpenClawAdapterEvent(type="run_status", status="running", content="mock")
         for part in ["正在处理...", " 已收到你的消息：", content, "。"]:
+            if cancel_event is not None and cancel_event.is_set():
+                raise asyncio.CancelledError
             yield OpenClawAdapterEvent(type="delta", content=part)
             await asyncio.sleep(0.2)
+        if cancel_event is not None and cancel_event.is_set():
+            raise asyncio.CancelledError
         yield OpenClawAdapterEvent(type="done")

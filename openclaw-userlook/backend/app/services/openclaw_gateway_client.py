@@ -14,7 +14,7 @@ from typing import Any, Literal
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import websockets
-from websockets.exceptions import WebSocketException
+from websockets.exceptions import ConnectionClosedOK, WebSocketException
 
 from app.core.config import get_settings
 from app.models.agent import Agent
@@ -109,6 +109,9 @@ class OpenClawGatewayClient:
         files: list[dict[str, Any]] | None = None,
         run_id: int | None = None,
         output_dir: str | None = None,
+        cancel_event: asyncio.Event | None = None,
+        assume_done_after_text_silence: bool = False,
+        final_silence_seconds: int | None = None,
     ) -> AsyncIterator[OpenClawGatewayEvent]:
         request_payload = self._build_chat_request(
             user=user,
@@ -133,17 +136,56 @@ class OpenClawGatewayClient:
             ) as gateway_ws:
                 await self._connect_gateway(gateway_ws)
                 await gateway_ws.send(json.dumps(request_payload, ensure_ascii=False))
+                has_text_output = False
 
                 while True:
+                    if cancel_event is not None and cancel_event.is_set():
+                        await gateway_ws.close()
+                        raise asyncio.CancelledError
                     try:
-                        raw_message = await asyncio.wait_for(
-                            gateway_ws.recv(),
-                            timeout=self.timeout_seconds,
-                        )
+                        recv_timeout = self.timeout_seconds
+                        if (
+                            assume_done_after_text_silence
+                            and has_text_output
+                            and final_silence_seconds is not None
+                        ):
+                            recv_timeout = max(1, final_silence_seconds)
+                        if cancel_event is None:
+                            raw_message = await asyncio.wait_for(
+                                gateway_ws.recv(),
+                                timeout=recv_timeout,
+                            )
+                        else:
+                            recv_task = asyncio.create_task(gateway_ws.recv())
+                            cancel_task = asyncio.create_task(cancel_event.wait())
+                            done, pending = await asyncio.wait(
+                                {recv_task, cancel_task},
+                                timeout=recv_timeout,
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            for pending_task in pending:
+                                pending_task.cancel()
+                            if not done:
+                                recv_task.cancel()
+                                cancel_task.cancel()
+                                raise TimeoutError
+                            if cancel_task in done:
+                                recv_task.cancel()
+                                await gateway_ws.close()
+                                raise asyncio.CancelledError
+                            raw_message = recv_task.result()
+                    except ConnectionClosedOK as exc:
+                        if has_text_output:
+                            return
+                        raise OpenClawGatewayConnectionError("OpenClaw stream ended without output") from exc
                     except TimeoutError as exc:
+                        if assume_done_after_text_silence and has_text_output:
+                            return
                         raise OpenClawGatewayConnectionError("OpenClaw Gateway 响应超时") from exc
 
                     event = self._parse_gateway_message(raw_message)
+                    if event.content:
+                        has_text_output = True
                     yield event
                     if event.type in {"done", "error"}:
                         break

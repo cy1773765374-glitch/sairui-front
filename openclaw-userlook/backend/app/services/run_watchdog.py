@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
-from app.models.task_run import TaskRun, TaskRunStatus
+from app.models.task_run import TERMINAL_RUN_STATUSES, TaskRun, TaskRunStatus
+from app.services.run_service import mark_task_run_stale, mark_task_run_timeout
 from app.services.task_queue import task_queue
+
+logger = logging.getLogger(__name__)
 
 
 def _utc_now() -> datetime:
@@ -37,6 +41,8 @@ def scan_stale_task_runs() -> int:
             )
         )
         for run in runs:
+            if run.status in TERMINAL_RUN_STATUSES:
+                continue
             if run.status == TaskRunStatus.running:
                 started_at = _as_aware(run.started_at)
                 if (
@@ -44,21 +50,17 @@ def scan_stale_task_runs() -> int:
                     and started_at is not None
                     and started_at + timedelta(seconds=run.timeout_seconds) <= now
                 ):
-                    run.status = TaskRunStatus.timeout
-                    run.error_message = "任务执行超过超时时间"
-                    run.finished_at = now
-                    run.cancel_requested = False
                     task_queue.cancel_task(run.id)
+                    mark_task_run_timeout(db, run, "任务执行超过超时时间")
+                    logger.warning("running_hard_timeout run_id=%s", run.id)
                     changed += 1
                     continue
 
                 heartbeat_at = _as_aware(run.heartbeat_at) or _as_aware(run.updated_at)
                 if heartbeat_at is not None and heartbeat_at <= stale_before:
-                    run.status = TaskRunStatus.stale
-                    run.error_message = "任务心跳过期，已标记为 stale"
-                    run.finished_at = now
-                    run.cancel_requested = False
                     task_queue.cancel_task(run.id)
+                    mark_task_run_stale(db, run, "任务心跳过期，已标记为 stale")
+                    logger.warning("stale_heartbeat run_id=%s", run.id)
                     changed += 1
                     continue
 
@@ -69,15 +71,11 @@ def scan_stale_task_runs() -> int:
                     and queued_at is not None
                     and queued_at + timedelta(seconds=settings.task_queue_timeout_seconds) <= now
                 ):
-                    run.status = TaskRunStatus.timeout
-                    run.error_message = "任务排队超过超时时间"
-                    run.finished_at = now
-                    run.cancel_requested = False
                     task_queue.cancel_task(run.id)
+                    mark_task_run_timeout(db, run, "任务排队超过超时时间")
+                    logger.warning("queued_timeout run_id=%s", run.id)
                     changed += 1
 
-        if changed:
-            db.commit()
     return changed
 
 
