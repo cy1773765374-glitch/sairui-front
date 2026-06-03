@@ -256,6 +256,7 @@ class OpenClawGatewayClient:
         request_id = str(request_payload.get("id") or "")
         params = request_payload.get("params") if isinstance(request_payload.get("params"), dict) else {}
         session_key = str(params.get("sessionKey") or "")
+        idempotency_key = str(params.get("idempotencyKey") or "")
         effective_client_message_id = (
             self._extract_gateway_context_value(params.get("message"), "client_message_id")
             or build_gateway_session_identity(user, agent, conversation, run_id, client_message_id).client_message_id
@@ -345,6 +346,7 @@ class OpenClawGatewayClient:
                                 run_id=run_id,
                                 request_id=request_id,
                                 session_key=session_key,
+                                idempotency_key=idempotency_key,
                                 conversation_id=conversation.id,
                                 client_message_id=effective_client_message_id,
                             ):
@@ -930,29 +932,32 @@ class OpenClawGatewayClient:
         session_key: str,
         conversation_id: int,
         client_message_id: str,
+        idempotency_key: str = "",
     ) -> bool:
         frame_id = frame.get("id")
         if isinstance(frame_id, str) and frame_id == request_id:
             return True
+        numeric_run_id = str(run_id) if run_id is not None else ""
         checks = [
-            ("run_id", str(run_id) if run_id is not None else ""),
-            ("runId", str(run_id) if run_id is not None else ""),
-            ("request_id", request_id),
-            ("requestId", request_id),
-            ("session_key", session_key),
-            ("sessionKey", session_key),
-            ("conversation_id", str(conversation_id)),
-            ("conversationId", str(conversation_id)),
-            ("client_message_id", client_message_id),
-            ("clientMessageId", client_message_id),
+            ("run_id", {numeric_run_id, idempotency_key}),
+            ("runId", {numeric_run_id, idempotency_key}),
+            ("request_id", {request_id}),
+            ("requestId", {request_id}),
+            ("session_key", {session_key}),
+            ("sessionKey", {session_key}),
+            ("conversation_id", {str(conversation_id)}),
+            ("conversationId", {str(conversation_id)}),
+            ("client_message_id", {client_message_id}),
+            ("clientMessageId", {client_message_id}),
         ]
         found_attribution = False
-        for key, expected in checks:
+        for key, expected_values in checks:
             value = self._find_nested_value(frame, key)
             if value is None:
                 continue
             found_attribution = True
-            if expected and str(value) != expected:
+            expected_values = {item for item in expected_values if item}
+            if expected_values and str(value) not in expected_values:
                 return False
         return True if found_attribution else True
 

@@ -102,6 +102,7 @@ class OpenClawGatewayClientTest(unittest.TestCase):
             "session_key": "agent:mysql-analysis:web:7:mysql:11",
             "conversation_id": 11,
             "client_message_id": "client-1",
+            "idempotency_key": "openclaw-userlook:59:client-1",
         }
 
         self.assertTrue(
@@ -119,6 +120,20 @@ class OpenClawGatewayClientTest(unittest.TestCase):
         self.assertFalse(
             client._is_frame_for_current_run(
                 {"type": "event", "event": "assistant_delta", "runId": 59, "clientMessageId": "other-client"},
+                **current,
+            )
+        )
+        self.assertTrue(
+            client._is_frame_for_current_run(
+                {
+                    "type": "event",
+                    "event": "chat",
+                    "payload": {
+                        "runId": "openclaw-userlook:59:client-1",
+                        "sessionKey": "agent:mysql-analysis:web:7:mysql:11",
+                        "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+                    },
+                },
                 **current,
             )
         )
