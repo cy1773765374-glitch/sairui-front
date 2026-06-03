@@ -198,6 +198,34 @@ async def _finish_success(
     return run
 
 
+async def _persist_terminal_notice(
+    *,
+    db,
+    run: TaskRun,
+    agent: Agent,
+    conversation: Conversation,
+    conversation_id: int,
+    content: str,
+    raw_payload: dict,
+) -> None:
+    assistant_message = upsert_assistant_message_for_run(
+        db,
+        run=run,
+        conversation=conversation,
+        content=content,
+        raw_payload_patch=raw_payload,
+    )
+    run.output_files_json = []
+    db.commit()
+    await _broadcast_assistant_done(
+        conversation_id,
+        message_id=assistant_message.id,
+        run_id=run.id,
+        output_files=[],
+        **_run_event_context(run, agent),
+    )
+
+
 async def _handle_terminal_error_event(
     *,
     db,
@@ -254,6 +282,16 @@ async def _handle_terminal_error_event(
             run_id=run.id,
             output_files=output_files_payload,
             **_run_event_context(run, agent),
+        )
+    else:
+        await _persist_terminal_notice(
+            db=db,
+            run=run,
+            agent=agent,
+            conversation=conversation,
+            conversation_id=conversation_id,
+            content=run.error_message or event.content or "OpenClaw call failed",
+            raw_payload=error_payload,
         )
     await connection_manager.broadcast_json(
         conversation_id,
@@ -607,6 +645,16 @@ async def execute_chat_run(
                         run_id=run.id,
                         output_files=output_files_payload,
                         **_run_event_context(run, agent),
+                    )
+                else:
+                    await _persist_terminal_notice(
+                        db=db,
+                        run=run,
+                        agent=agent,
+                        conversation=conversation,
+                        conversation_id=conversation_id,
+                        content=run.error_message or "OpenClaw Gateway response timed out",
+                        raw_payload=timeout_payload,
                     )
                 await _broadcast_run_status(
                     conversation_id,

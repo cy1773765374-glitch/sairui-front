@@ -214,7 +214,15 @@ class TaskExecutorFinishSuccessTest(unittest.IsolatedAsyncioTestCase):
                 idempotency_key="openclaw-userlook:59:client-1",
                 raw_payload={"status": "queued"},
             )
-            db.add_all([user, agent, conversation, run])
+            assistant_message = Message(
+                id=100,
+                conversation_id=conversation.id,
+                run_id=run.id,
+                role=MessageRole.assistant,
+                content="",
+                raw_payload={},
+            )
+            db.add_all([user, agent, conversation, run, assistant_message])
             db.commit()
 
         class FakeTimeoutAdapter:
@@ -253,6 +261,15 @@ class TaskExecutorFinishSuccessTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(saved_run.raw_payload["timeout"])
             self.assertEqual(saved_run.raw_payload["gateway_request"]["method"], "chat.send")
             self.assertEqual(saved_run.raw_payload["gateway_debug_events"][0]["classification"], "outbound_request")
+            assistant_messages = db.scalars(
+                select(Message)
+                .where(Message.run_id == 59)
+                .where(Message.role == MessageRole.assistant)
+            ).all()
+            self.assertEqual(len(assistant_messages), 1)
+            self.assertEqual(assistant_messages[0].id, 100)
+            self.assertEqual(assistant_messages[0].content, "OpenClaw Gateway response timed out")
+            self.assertEqual(assistant_messages[0].raw_payload["status"], "timeout")
 
 
 if __name__ == "__main__":
