@@ -279,6 +279,14 @@ function hasBlockingActiveRun() {
   return currentRunId.value !== null && isActiveRunStatus(currentRunStatus.value)
 }
 
+function createClientMessageId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID()
+  }
+  const randomPart = Math.random().toString(36).slice(2, 10)
+  return `web-${Date.now().toString(36)}-${randomPart}`
+}
+
 function parseConversationId(value: unknown) {
   const rawValue = Array.isArray(value) ? value[0] : value
   const numericValue = Number(rawValue)
@@ -935,7 +943,7 @@ async function sendMessage(content: string, fileIds: number[]) {
     return
   }
 
-  const clientMessageId = crypto.randomUUID()
+  const clientMessageId = createClientMessageId()
   sending.value = true
   errorMessage.value = ''
   outputFiles.value = []
