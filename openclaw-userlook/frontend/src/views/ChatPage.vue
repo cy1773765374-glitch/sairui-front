@@ -275,6 +275,10 @@ function resetConversationRuntimeState(conversationId?: number) {
   fallbackRuntime.value = nextState
 }
 
+function hasBlockingActiveRun() {
+  return currentRunId.value !== null && isActiveRunStatus(currentRunStatus.value)
+}
+
 function parseConversationId(value: unknown) {
   const rawValue = Array.isArray(value) ? value[0] : value
   const numericValue = Number(rawValue)
@@ -458,6 +462,9 @@ function scheduleReconnect(conversationId: number) {
 async function reconcileCurrentRun(conversationId: number) {
   if (!currentRunId.value) {
     sending.value = false
+    currentRunId.value = null
+    currentClientMessageId.value = null
+    currentRunStatus.value = ''
     activeAssistantMessageId.value = null
     return
   }
@@ -600,7 +607,7 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       if (payload.output_files) {
         outputFiles.value = payload.output_files
       }
-      sending.value = isActiveRunStatus(currentRunStatus.value)
+      sending.value = currentRunId.value !== null && isActiveRunStatus(currentRunStatus.value)
       if (sending.value) {
         startRunPolling(conversationId)
       }
@@ -660,6 +667,9 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
         currentRunStatusMessage.value = payload.message ?? '当前会话已有任务正在运行'
       } else {
         sending.value = false
+        currentRunId.value = null
+        currentClientMessageId.value = null
+        currentRunStatus.value = ''
         currentRunStatusMessage.value = payload.message ?? '当前会话已有任务正在运行'
       }
       ElMessage.warning(payload.message ?? '当前会话已有任务正在运行')
@@ -680,6 +690,8 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       void reconcileCurrentRun(conversationId)
     } else {
       sending.value = false
+      currentClientMessageId.value = null
+      currentRunStatus.value = ''
     }
   }
 }
@@ -782,7 +794,7 @@ async function selectAgent(nextAgent: Agent) {
 function isConversationDeleteBlocked(nextConversation: Conversation) {
   return (
     nextConversation.id === conversation.value?.id &&
-    (sending.value || isActiveRunStatus(currentRunStatus.value))
+    (sending.value || hasBlockingActiveRun())
   )
 }
 
@@ -909,7 +921,7 @@ async function selectConversation(nextConversation: Conversation) {
 }
 
 async function sendMessage(content: string, fileIds: number[]) {
-  if (sending.value || isActiveRunStatus(currentRunStatus.value)) {
+  if (sending.value || hasBlockingActiveRun()) {
     ElMessage.warning('当前会话已有任务正在运行')
     return
   }
@@ -955,6 +967,9 @@ async function sendMessage(content: string, fileIds: number[]) {
     attachedFiles.value = []
   } catch {
     sending.value = false
+    currentRunId.value = null
+    currentClientMessageId.value = null
+    currentRunStatus.value = ''
     ElMessage.error('消息发送失败')
   }
 }
