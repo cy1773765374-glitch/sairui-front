@@ -90,27 +90,8 @@ CHAT_SEND_PARAM_KEYS = {
     "timeoutMs",
     "idempotencyKey",
     "attachments",
-    "agentId",
-    "agent_id",
-    "openclawAgentId",
-    "openclaw_agent_id",
-    "agentCode",
-    "agent_code",
-    "channel",
-    "source",
-    "userId",
-    "user_id",
-    "conversationId",
-    "conversation_id",
-    "runId",
-    "run_id",
-    "clientMessageId",
-    "client_message_id",
-    "outputDir",
-    "output_dir",
 }
 REQUIRED_CHAT_SEND_PARAM_KEYS = {"sessionKey", "message"}
-SOURCE = "openclaw-userlook"
 DEBUG_EVENT_LIMIT = 50
 REDACTED = "***REDACTED***"
 SENSITIVE_KEY_PARTS = (
@@ -709,18 +690,7 @@ class OpenClawGatewayClient:
             "deliver": self.deliver,
             "timeoutMs": self.timeout_seconds * 1000,
             "idempotencyKey": effective_idempotency_key,
-            "agentId": identity.openclaw_agent_id,
-            "agentCode": identity.agent_code,
-            "channel": identity.channel,
-            "source": SOURCE,
-            "userId": str(identity.user_id),
-            "conversationId": str(identity.conversation_id),
-            "clientMessageId": identity.client_message_id,
         }
-        if run_id is not None:
-            params["runId"] = str(run_id)
-        if output_dir:
-            params["outputDir"] = output_dir
         attachments = self._build_attachments(files)
         if attachments:
             params["attachments"] = attachments
