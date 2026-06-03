@@ -155,6 +155,7 @@ curl -X POST http://127.0.0.1:10009/api/admin/agents/main/permissions ^
 - `TASK_CHAT_TIMEOUT_SECONDS`
 - `TASK_SHORT_CHAT_TIMEOUT_SECONDS`
 - `TASK_GATEWAY_FINAL_SILENCE_SECONDS`
+- `TASK_GATEWAY_FIRST_TOKEN_TIMEOUT_SECONDS`
 - `TASK_ASSUME_DONE_AFTER_TEXT_SILENCE`
 - `TASK_JOB_TIMEOUT_SECONDS`
 - `TASK_QUEUE_TIMEOUT_SECONDS`
@@ -186,6 +187,8 @@ WS /api/ws/conversations/{conversation_id}?token={JWT}
 WebSocket is only the realtime display channel. Final chat content and run status are recovered from `task_runs.output_text`, `task_runs.raw_payload`, and the assistant row in `messages`. If a page refreshes or the user switches Agents while a run is active, the frontend reloads `messages` and `ConversationDetail.active_run.output_text` to restore the visible assistant reply.
 
 For short chat runs, if Gateway emits assistant text but does not send an explicit done event, the backend can mark the run `success` after `TASK_GATEWAY_FINAL_SILENCE_SECONDS` seconds of text silence when `TASK_ASSUME_DONE_AFTER_TEXT_SILENCE=true`.
+
+If Gateway only emits connection health/tick frames and no assistant text, the backend marks the run `timeout` after `TASK_GATEWAY_FIRST_TOKEN_TIMEOUT_SECONDS` seconds. This prevents one silent Gateway call from occupying the Gateway concurrency slot for the full chat timeout.
 
 Gateway `chat.send` requests keep the root `params` compatible with Gateway's strict schema: `sessionKey`, `message`, `deliver`, `timeoutMs`, `idempotencyKey`, and optional `attachments`. Web context such as Agent code, OpenClaw Agent id, run id, conversation id, client message id, and output directory is carried in the message context prefix instead of unsupported root params. `OPENCLAW_GATEWAY_DELIVER=true` is the default so the backend asks Gateway to actually deliver the message to the target Agent. `OPENCLAW_GATEWAY_MAX_CONCURRENCY=1` protects Gateway by default while conversation-level serialization remains handled by the task queue.
 

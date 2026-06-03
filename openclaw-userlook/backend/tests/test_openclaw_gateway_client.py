@@ -8,6 +8,7 @@ from app.models.conversation import Conversation
 from app.models.user import User, UserRole, UserStatus
 from app.services.gateway_session import build_gateway_session_identity
 from app.services.openclaw_gateway_client import OpenClawGatewayClient
+from app.services.openclaw_gateway_client import OpenClawGatewayConnectionError
 
 
 def make_user() -> User:
@@ -316,6 +317,39 @@ class OpenClawGatewayClientStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([event.type for event in events], ["delta", "done"])
         debug_events = events[0].gateway_debug_events or []
         self.assertTrue(any(item["classification"] == "global_ignored" for item in debug_events))
+
+    async def test_stream_chat_times_out_when_no_first_assistant_output_arrives(self) -> None:
+        client = OpenClawGatewayClient(ws_url="ws://127.0.0.1:18789", token="token", timeout_seconds=300)
+        fake_ws = FakeGatewayWebSocket(
+            [
+                {"type": "event", "event": "tick", "payload": {"ts": 1}},
+            ]
+        )
+
+        with patch("app.services.openclaw_gateway_client.websockets.connect", return_value=FakeGatewayConnection(fake_ws)):
+            client._connect_gateway = AsyncMock(return_value=None)
+            with self.assertRaisesRegex(OpenClawGatewayConnectionError, "first assistant output timed out") as raised:
+                [
+                    event
+                    async for event in client.stream_chat(
+                        user=make_user(),
+                        agent=make_agent(),
+                        conversation=make_conversation(),
+                        content="who are you",
+                        file_ids=[],
+                        files=[],
+                        run_id=59,
+                        output_dir=None,
+                        client_message_id="client-1",
+                        gateway_session_key="agent:mysql-analysis:web:7:mysql:11",
+                        idempotency_key="openclaw-userlook:59:client-1",
+                        first_token_timeout_seconds=1,
+                        recv_tick_seconds=1,
+                    )
+                ]
+
+        debug_events = raised.exception.gateway_debug_events
+        self.assertTrue(any(item["classification"] == "parsed_run_status" for item in debug_events))
 
 
 class FakeGatewayConnection:

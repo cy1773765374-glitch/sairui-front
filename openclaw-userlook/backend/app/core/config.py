@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     task_chat_timeout_seconds: int = Field(default=120, alias="TASK_CHAT_TIMEOUT_SECONDS")
     task_short_chat_timeout_seconds: int = Field(default=600, alias="TASK_SHORT_CHAT_TIMEOUT_SECONDS")
     task_gateway_final_silence_seconds: int = Field(default=10, alias="TASK_GATEWAY_FINAL_SILENCE_SECONDS")
+    task_gateway_first_token_timeout_seconds: int = Field(
+        default=60,
+        alias="TASK_GATEWAY_FIRST_TOKEN_TIMEOUT_SECONDS",
+    )
     task_gateway_recv_tick_seconds: int = Field(default=1, alias="TASK_GATEWAY_RECV_TICK_SECONDS")
     task_assume_done_after_text_silence: bool = Field(default=True, alias="TASK_ASSUME_DONE_AFTER_TEXT_SILENCE")
     task_job_timeout_seconds: int = Field(default=1800, alias="TASK_JOB_TIMEOUT_SECONDS")
