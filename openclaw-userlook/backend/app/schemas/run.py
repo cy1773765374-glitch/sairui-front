@@ -13,6 +13,7 @@ class TaskRunRead(BaseModel):
     agent_id: int
     agent_code: str | None = None
     agent_name: str | None = None
+    openclaw_agent_id: str | None = None
     conversation_id: int | None
     status: TaskRunStatus
     input_text: str
@@ -23,6 +24,9 @@ class TaskRunRead(BaseModel):
     output_files_json: Any | None = None
     raw_payload: Any | None = None
     raw_payload_summary: Any | None = None
+    client_message_id: str | None = None
+    gateway_session_key: str | None = None
+    idempotency_key: str | None = None
     error_message: str | None
     queued_at: datetime | None
     started_at: datetime | None
