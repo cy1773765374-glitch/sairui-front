@@ -370,24 +370,38 @@ def list_task_runs(
     run_type: str | None = None,
     active_only: bool = False,
 ) -> list[TaskRunRead]:
-    statement = (
+    id_statement = select(TaskRun.id).order_by(TaskRun.created_at.desc(), TaskRun.id.desc())
+    if current_user.role != UserRole.admin:
+        id_statement = id_statement.where(TaskRun.user_id == current_user.id)
+    if agent_id is not None:
+        id_statement = id_statement.where(TaskRun.agent_id == agent_id)
+    if conversation_id is not None:
+        id_statement = id_statement.where(TaskRun.conversation_id == conversation_id)
+    if status_value is not None:
+        id_statement = id_statement.where(TaskRun.status == status_value)
+    if run_type:
+        id_statement = id_statement.where(TaskRun.run_type == run_type)
+    if active_only:
+        id_statement = id_statement.where(TaskRun.status.in_(ACTIVE_RUN_STATUSES))
+
+    run_ids = list(db.scalars(id_statement).all())
+    if not run_ids:
+        return []
+
+    detail_statement = (
         select(TaskRun, Agent)
         .join(Agent, Agent.id == TaskRun.agent_id)
-        .order_by(TaskRun.created_at.desc(), TaskRun.id.desc())
+        .where(TaskRun.id.in_(run_ids))
     )
-    if current_user.role != UserRole.admin:
-        statement = statement.where(TaskRun.user_id == current_user.id)
-    if agent_id is not None:
-        statement = statement.where(TaskRun.agent_id == agent_id)
-    if conversation_id is not None:
-        statement = statement.where(TaskRun.conversation_id == conversation_id)
-    if status_value is not None:
-        statement = statement.where(TaskRun.status == status_value)
-    if run_type:
-        statement = statement.where(TaskRun.run_type == run_type)
-    if active_only:
-        statement = statement.where(TaskRun.status.in_(ACTIVE_RUN_STATUSES))
-    return [_to_read(db, run, agent, include_details=False) for run, agent in db.execute(statement).all()]
+    rows_by_id = {run.id: (run, agent) for run, agent in db.execute(detail_statement).all()}
+    result: list[TaskRunRead] = []
+    for run_id in run_ids:
+        row = rows_by_id.get(run_id)
+        if row is None:
+            continue
+        run, agent = row
+        result.append(_to_read(db, run, agent, include_details=False))
+    return result
 
 
 def get_task_run_detail(db: Session, current_user: User, run_id: int) -> TaskRunRead:
