@@ -4,6 +4,8 @@
 # 部署生成的临时目录 / zip 包
 openclaw-userlook-deploy-*/
 openclaw-userlook-deploy-*.zip
+openclaw-userlook/backend/.pytest_cache/
+openclaw-userlook/backend/probe-results/
 
 # 如果你有实际的 openclaw-userlook 源码目录，但不想忽略它，可以单独写：
 # !openclaw-userlook/

@@ -150,6 +150,8 @@ curl -X POST http://127.0.0.1:10009/api/admin/agents/main/permissions ^
 - `OPENCLAW_GATEWAY_TOKEN`
 - `OPENCLAW_GATEWAY_PASSWORD`
 - `OPENCLAW_GATEWAY_TIMEOUT_SECONDS`
+- `OPENCLAW_GATEWAY_DELIVER`
+- `OPENCLAW_GATEWAY_MAX_CONCURRENCY`
 - `TASK_CHAT_TIMEOUT_SECONDS`
 - `TASK_SHORT_CHAT_TIMEOUT_SECONDS`
 - `TASK_GATEWAY_FINAL_SILENCE_SECONDS`
@@ -185,6 +187,16 @@ WebSocket is only the realtime display channel. Final chat content and run statu
 
 For short chat runs, if Gateway emits assistant text but does not send an explicit done event, the backend can mark the run `success` after `TASK_GATEWAY_FINAL_SILENCE_SECONDS` seconds of text silence when `TASK_ASSUME_DONE_AFTER_TEXT_SILENCE=true`.
 
+Gateway `chat.send` requests include structured web context (`agentId`, `agentCode`, `channel`, `source`, `userId`, `conversationId`, `runId`, `clientMessageId`, and `outputDir`) in addition to the contextual message prefix. `OPENCLAW_GATEWAY_DELIVER=true` is the default so the backend asks Gateway to actually deliver the message to the target Agent. `OPENCLAW_GATEWAY_MAX_CONCURRENCY=1` protects Gateway by default while conversation-level serialization remains handled by the task queue.
+
+To inspect the live Gateway protocol without exposing credentials, run the probe script. It reuses the normal Gateway handshake, redacts token/password/signature/private-key-like fields, saves the outbound request plus the first 50 inbound frames, and exits non-zero when no assistant output is received within the timeout:
+
+```bash
+python scripts/probe_openclaw_gateway.py --agent main --message "你是谁" --timeout 30
+python scripts/probe_openclaw_gateway.py --agent image-daoban --message "你是谁" --timeout 30
+python scripts/probe_openclaw_gateway.py --agent huizong-ceshi --message "你是谁" --timeout 30
+```
+
 The current chat queue follows the OpenClaw Feishu/Lark plugin scheduling model only as a reference: FastAPI keeps a process-level queue, serializes tasks by `conversation_id`, and allows different conversations or different Agents to run concurrently. `TASK_GLOBAL_CHAT_CONCURRENCY` is only a global concurrency guard; it is not a global serial queue.
 
 Stop requests use an abort fast-path through the active dispatcher and then persist the final `cancelled` status. The current queue is still in a single FastAPI process. Production deployments must keep one backend worker process; multi-worker or multi-instance queue coordination requires a later Redis, Celery, or database-backed queue design.
@@ -212,6 +224,7 @@ OpenClaw Gateway 连接失败，请检查 openclaw-gateway.service 是否运行
 
 ```bash
 .\.venv\Scripts\python.exe -m compileall app tests
+.\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
 .\.venv\Scripts\python.exe -c "import app.main; print('ok')"
 .\.venv\Scripts\python.exe -c "from app.core.security import hash_password, verify_password; h=hash_password('Admin@123456'); print(verify_password('Admin@123456', h))"
