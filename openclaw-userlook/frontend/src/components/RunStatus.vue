@@ -24,13 +24,35 @@ const tagType = computed(() => {
   }
   return 'info'
 })
+
+const statusLabel = computed(() => {
+  if (props.status === 'pending' || props.status === 'queued' || props.status === 'running') {
+    return '执行中'
+  }
+  if (props.status === 'success') {
+    return '完成'
+  }
+  if (props.status === 'failed') {
+    return '失败'
+  }
+  if (props.status === 'timeout') {
+    return '超时'
+  }
+  if (props.status === 'stale') {
+    return '异常中断'
+  }
+  if (props.status === 'cancelled') {
+    return '已取消'
+  }
+  return 'idle'
+})
 </script>
 
 <template>
   <section v-if="runId || status || outputFiles.length" class="run-status">
     <div class="status-line">
       <el-tag :type="tagType" effect="plain">
-        {{ runId ? `Run #${runId}` : 'Run' }} {{ status || 'idle' }}
+        {{ runId ? `Run #${runId}` : 'Run' }} {{ statusLabel }}
       </el-tag>
       <span v-if="message" class="status-message">{{ message }}</span>
     </div>

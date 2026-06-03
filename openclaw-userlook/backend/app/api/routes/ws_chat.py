@@ -16,8 +16,10 @@ from app.services.agent_service import user_can_access_agent
 from app.services.auth_service import get_user_by_id
 from app.services.conversation_service import require_conversation_for_user, save_message
 from app.services.file_service import list_gateway_upload_files, validate_user_upload_file_ids
+from app.services.gateway_session import build_gateway_session_identity, normalize_client_message_id
 from app.services.run_service import (
     create_task_run,
+    get_task_run_by_client_message,
     get_task_run_detail,
     get_latest_active_run_for_conversation,
     request_task_run_cancel,
@@ -108,6 +110,16 @@ async def chat_websocket(
         async def send_json(payload: dict) -> None:
             await connection_manager.send_json(websocket, payload)
 
+        def run_event_context(run, identity=None) -> dict:
+            return {
+                "conversation_id": run.conversation_id,
+                "run_id": run.id,
+                "client_message_id": run.client_message_id or (identity.client_message_id if identity else None),
+                "agent_code": agent.code,
+                "openclaw_agent_id": agent.openclaw_agent_id,
+                "gateway_session_key": run.gateway_session_key or (identity.session_key if identity else None),
+            }
+
         try:
             while True:
                 raw_message = await websocket.receive_json()
@@ -131,6 +143,10 @@ async def chat_websocket(
                             "type": "run_status",
                             "run_id": run_read.id,
                             "conversation_id": run_read.conversation_id,
+                            "client_message_id": run_read.client_message_id,
+                            "agent_code": run_read.agent_code,
+                            "openclaw_agent_id": run_read.openclaw_agent_id,
+                            "gateway_session_key": run_read.gateway_session_key,
                             "status": run_read.status.value,
                             "message": run_read.error_message,
                         }
@@ -143,12 +159,50 @@ async def chat_websocket(
                     await send_json({"type": "error", "message": "invalid message format"})
                     continue
 
+                client_message_id = normalize_client_message_id(inbound_message.client_message_id)
+                existing_run = get_task_run_by_client_message(
+                    db,
+                    conversation_id=conversation.id,
+                    client_message_id=client_message_id,
+                )
+                if existing_run is not None:
+                    existing_read = get_task_run_detail(db, current_user, existing_run.id)
+                    await send_json(
+                        {
+                            "type": "user_message_ack",
+                            "conversation_id": existing_read.conversation_id,
+                            "run_id": existing_read.id,
+                            "client_message_id": existing_read.client_message_id,
+                            "agent_code": existing_read.agent_code,
+                            "openclaw_agent_id": existing_read.openclaw_agent_id,
+                            "gateway_session_key": existing_read.gateway_session_key,
+                            "status": existing_read.status.value,
+                        }
+                    )
+                    await send_json(
+                        {
+                            "type": "run_status",
+                            "conversation_id": existing_read.conversation_id,
+                            "run_id": existing_read.id,
+                            "client_message_id": existing_read.client_message_id,
+                            "agent_code": existing_read.agent_code,
+                            "openclaw_agent_id": existing_read.openclaw_agent_id,
+                            "gateway_session_key": existing_read.gateway_session_key,
+                            "status": existing_read.status.value,
+                            "message": existing_read.error_message,
+                            "output_files": jsonable_encoder(existing_read.output_files),
+                        }
+                    )
+                    continue
+
                 active_run = get_latest_active_run_for_conversation(db, current_user, conversation.id)
                 if active_run is not None or task_queue.has_active_task(conversation.id):
                     await send_json(
                         {
                             "type": "active_run",
                             "message": "当前会话已有任务正在运行",
+                            "conversation_id": conversation.id,
+                            "client_message_id": client_message_id,
                             "active_run": jsonable_encoder(active_run) if active_run else None,
                         }
                     )
@@ -165,6 +219,13 @@ async def chat_websocket(
                     await send_json({"type": "error", "message": "invalid file_ids"})
                     continue
 
+                provisional_identity = build_gateway_session_identity(
+                    current_user,
+                    agent,
+                    conversation,
+                    None,
+                    client_message_id,
+                )
                 task_run = create_task_run(
                     db,
                     current_user=current_user,
@@ -173,14 +234,54 @@ async def chat_websocket(
                     input_text=inbound_message.content,
                     run_type="chat",
                     priority=100,
+                    client_message_id=provisional_identity.client_message_id,
+                    gateway_session_key=provisional_identity.session_key,
+                    idempotency_key=provisional_identity.idempotency_key,
+                    raw_payload={
+                        "channel": provisional_identity.channel,
+                        "agent_code": provisional_identity.agent_code,
+                        "openclaw_agent_id": provisional_identity.openclaw_agent_id,
+                        "conversation_id": conversation.id,
+                        "client_message_id": provisional_identity.client_message_id,
+                        "gateway_session_key": provisional_identity.session_key,
+                        "idempotency_key": provisional_identity.idempotency_key,
+                        "status": "queued",
+                    },
                 )
+                identity = build_gateway_session_identity(
+                    current_user,
+                    agent,
+                    conversation,
+                    task_run.id,
+                    provisional_identity.client_message_id,
+                )
+                task_run.gateway_session_key = identity.session_key
+                task_run.idempotency_key = identity.idempotency_key
+                task_run.raw_payload = {
+                    **(task_run.raw_payload or {}),
+                    **identity.model_dump(),
+                    "status": "queued",
+                }
+                db.commit()
+                db.refresh(task_run)
 
                 save_message(
                     db,
                     conversation,
                     MessageRole.user,
                     inbound_message.content,
-                    raw_payload=inbound_message.model_dump(),
+                    raw_payload={
+                        "type": "user_message",
+                        "content": inbound_message.content,
+                        "file_ids": inbound_message.file_ids,
+                        "client_message_id": identity.client_message_id,
+                        "conversation_id": conversation.id,
+                        "run_id": task_run.id,
+                        "agent_code": agent.code,
+                        "openclaw_agent_id": agent.openclaw_agent_id,
+                        "gateway_session_key": identity.session_key,
+                        "idempotency_key": identity.idempotency_key,
+                    },
                     run_id=task_run.id,
                 )
                 _record_agent_call_audit(
@@ -188,10 +289,18 @@ async def chat_websocket(
                     user_id=current_user.id,
                     agent=agent,
                     conversation_id=conversation.id,
-                    session_key=conversation.session_key,
+                    session_key=identity.session_key,
                     file_ids=inbound_message.file_ids,
                     ip=websocket.client.host if websocket.client else None,
                     user_agent=websocket.headers.get("user-agent"),
+                )
+
+                await send_json(
+                    {
+                        "type": "user_message_ack",
+                        **run_event_context(task_run, identity),
+                        "status": "queued",
+                    }
                 )
 
                 queue_status = await start_chat_run(
@@ -206,8 +315,7 @@ async def chat_websocket(
                 await send_json(
                     {
                         "type": "run_status",
-                        "run_id": task_run.id,
-                        "conversation_id": conversation.id,
+                        **run_event_context(task_run, identity),
                         "queue_status": queue_status,
                         "status": "queued",
                     }

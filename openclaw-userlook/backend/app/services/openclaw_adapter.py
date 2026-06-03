@@ -29,6 +29,8 @@ class OpenClawAdapterEvent:
     status: AdapterRunStatus | None = None
     output_dir: str | None = None
     raw: dict[str, Any] | None = None
+    assumed_done_after_text_silence: bool = False
+    gateway_debug_events: list[dict[str, Any]] | None = None
 
 
 class OpenClawAdapter:
@@ -59,6 +61,10 @@ class OpenClawAdapter:
         cancel_event: asyncio.Event | None = None,
         assume_done_after_text_silence: bool = False,
         final_silence_seconds: int | None = None,
+        recv_tick_seconds: int | None = None,
+        client_message_id: str | None = None,
+        gateway_session_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> AsyncIterator[OpenClawAdapterEvent]:
         if self.settings.mock_openclaw:
             async for event in self._mock_stream(content, cancel_event=cancel_event):
@@ -84,6 +90,10 @@ class OpenClawAdapter:
                 cancel_event=cancel_event,
                 assume_done_after_text_silence=assume_done_after_text_silence,
                 final_silence_seconds=final_silence_seconds,
+                recv_tick_seconds=recv_tick_seconds,
+                client_message_id=client_message_id,
+                gateway_session_key=gateway_session_key,
+                idempotency_key=idempotency_key,
             ):
                 yield OpenClawAdapterEvent(
                     type=event.type,
@@ -91,6 +101,8 @@ class OpenClawAdapter:
                     status=event.status,
                     output_dir=event.output_dir,
                     raw=event.raw,
+                    assumed_done_after_text_silence=event.assumed_done_after_text_silence,
+                    gateway_debug_events=event.gateway_debug_events,
                 )
         except OpenClawGatewayConnectionError as exc:
             message = str(exc) or GATEWAY_UNAVAILABLE_MESSAGE

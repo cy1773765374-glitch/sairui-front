@@ -19,25 +19,54 @@ import { cancelRun, fetchRun, isActiveRunStatus, type TaskRun, type TaskRunStatu
 import ChatWindow from '../components/ChatWindow.vue'
 
 type ServerWsMessage =
-  | { type: 'assistant_delta'; conversation_id?: number; run_id?: number; message_id?: number | null; content: string }
-  | { type: 'assistant_done'; conversation_id?: number; message_id: number; run_id?: number; output_files?: UserFile[] }
+  | {
+      type: 'user_message_ack'
+      conversation_id?: number
+      run_id: number
+      client_message_id?: string | null
+      agent_code?: string | null
+      openclaw_agent_id?: string | null
+      gateway_session_key?: string | null
+      status: TaskRunStatus | 'queued'
+    }
+  | {
+      type: 'assistant_delta'
+      conversation_id?: number
+      run_id?: number
+      client_message_id?: string | null
+      message_id?: number | null
+      content: string
+    }
+  | {
+      type: 'assistant_done'
+      conversation_id?: number
+      message_id: number
+      run_id?: number
+      client_message_id?: string | null
+      output_files?: UserFile[]
+    }
   | {
       type: 'run_status'
       run_id?: number
       conversation_id?: number
+      client_message_id?: string | null
+      agent_code?: string | null
+      openclaw_agent_id?: string | null
+      gateway_session_key?: string | null
       queue_status?: 'queued' | 'immediate'
       status: TaskRunStatus | 'done' | 'idle'
       message?: string
       output_files?: UserFile[]
     }
-  | { type: 'active_run'; message?: string; active_run: TaskRun | null }
-  | { type: 'error'; message: string }
+  | { type: 'active_run'; conversation_id?: number; client_message_id?: string | null; message?: string; active_run: TaskRun | null }
+  | { type: 'error'; conversation_id?: number; run_id?: number; client_message_id?: string | null; message: string }
 
 interface ConversationRuntimeState {
   sending: boolean
   activeAssistantMessageId: string | number | null
   outputFiles: UserFile[]
   currentRunId: number | null
+  currentClientMessageId: string | null
   currentRunStatus: TaskRunStatus | ''
   currentRunStatusMessage: string
 }
@@ -64,6 +93,8 @@ const fallbackRuntime = ref<ConversationRuntimeState>(createRuntimeState())
 let socket: WebSocket | null = null
 let socketConversationId: number | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+const runPollingTimers = new Map<number, ReturnType<typeof setInterval>>()
+const runPollingInFlight = new Set<number>()
 let reconnectAttempts = 0
 let unmounted = false
 let suppressRouteWatch = false
@@ -119,6 +150,13 @@ const currentRunId = computed({
   },
 })
 
+const currentClientMessageId = computed({
+  get: () => activeRuntime.value.currentClientMessageId,
+  set: (value: string | null) => {
+    activeRuntime.value.currentClientMessageId = value
+  },
+})
+
 const currentRunStatus = computed({
   get: () => activeRuntime.value.currentRunStatus,
   set: (value: TaskRunStatus | '') => {
@@ -139,6 +177,7 @@ function createRuntimeState(): ConversationRuntimeState {
     activeAssistantMessageId: null,
     outputFiles: [],
     currentRunId: null,
+    currentClientMessageId: null,
     currentRunStatus: '',
     currentRunStatusMessage: '',
   }
@@ -214,12 +253,16 @@ function applyRunState(run: TaskRun | null) {
     activeRunByConversation.value[run.conversation_id] = run
   }
   runtime.currentRunId = run?.id ?? null
+  runtime.currentClientMessageId = run?.client_message_id ?? runtime.currentClientMessageId
   runtime.currentRunStatus = run?.status ?? ''
   runtime.currentRunStatusMessage = run?.error_message ?? ''
   runtime.outputFiles = run?.output_files ?? []
   runtime.sending = isActiveRunStatus(run?.status)
   if (!runtime.sending) {
     runtime.activeAssistantMessageId = null
+    if (run?.conversation_id) {
+      stopRunPolling(run.conversation_id)
+    }
   }
 }
 
@@ -268,8 +311,12 @@ async function loadHistory(
   normalizeMessages(detail.id, detail.messages, detail.active_run)
   if (detail.active_run) {
     applyRunState(detail.active_run)
+    if (isActiveRunStatus(detail.active_run.status)) {
+      startRunPolling(detail.id)
+    }
   } else {
     activeRunByConversation.value[detail.id] = null
+    stopRunPolling(detail.id)
     resetConversationRuntimeState(detail.id)
   }
   return detail
@@ -282,6 +329,68 @@ function clearReconnectTimer() {
   }
 }
 
+function stopRunPolling(conversationId?: number) {
+  if (conversationId !== undefined) {
+    const timer = runPollingTimers.get(conversationId)
+    if (timer) {
+      clearInterval(timer)
+      runPollingTimers.delete(conversationId)
+    }
+    runPollingInFlight.delete(conversationId)
+    return
+  }
+  runPollingTimers.forEach((timer) => clearInterval(timer))
+  runPollingTimers.clear()
+  runPollingInFlight.clear()
+}
+
+async function pollRunOnce(conversationId: number) {
+  const runtime = getRuntimeForConversation(conversationId)
+  const runId = runtime.currentRunId
+  const clientMessageId = runtime.currentClientMessageId
+  if (!runId || !isActiveRunStatus(runtime.currentRunStatus) || runPollingInFlight.has(conversationId)) {
+    return
+  }
+  runPollingInFlight.add(conversationId)
+  try {
+    const run = await fetchRun(runId)
+    if (run.conversation_id !== conversationId || run.id !== runId) {
+      return
+    }
+    if (clientMessageId && run.client_message_id && run.client_message_id !== clientMessageId) {
+      return
+    }
+    applyRunState(run)
+    if (!isActiveRunStatus(run.status)) {
+      stopRunPolling(conversationId)
+      if (conversation.value?.id === conversationId) {
+        await loadHistory(conversationId, activeInitializeRequestId)
+      }
+    }
+  } catch {
+    if (conversation.value?.id === conversationId) {
+      currentRunStatusMessage.value = '无法确认任务状态'
+    }
+  } finally {
+    runPollingInFlight.delete(conversationId)
+  }
+}
+
+function startRunPolling(conversationId: number) {
+  const runtime = getRuntimeForConversation(conversationId)
+  if (!runtime.currentRunId || !isActiveRunStatus(runtime.currentRunStatus)) {
+    return
+  }
+  if (runPollingTimers.has(conversationId)) {
+    return
+  }
+  void pollRunOnce(conversationId)
+  const timer = setInterval(() => {
+    void pollRunOnce(conversationId)
+  }, 1500)
+  runPollingTimers.set(conversationId, timer)
+}
+
 function isCurrentSocket(currentSocket: WebSocket, conversationId: number) {
   return (
     !unmounted &&
@@ -291,12 +400,22 @@ function isCurrentSocket(currentSocket: WebSocket, conversationId: number) {
   )
 }
 
-function isPayloadForConversation(payload: { conversation_id?: number; run_id?: number }, conversationId: number) {
+function isPayloadForConversation(
+  payload: { conversation_id?: number; run_id?: number; client_message_id?: string | null },
+  conversationId: number,
+) {
   if (payload.conversation_id !== undefined && payload.conversation_id !== conversationId) {
     return false
   }
   const runtime = getRuntimeForConversation(conversationId)
   if (payload.run_id !== undefined && runtime.currentRunId !== null && payload.run_id !== runtime.currentRunId) {
+    return false
+  }
+  if (
+    payload.client_message_id &&
+    runtime.currentClientMessageId &&
+    payload.client_message_id !== runtime.currentClientMessageId
+  ) {
     return false
   }
   return true
@@ -420,6 +539,22 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       return
     }
 
+    if (payload.type === 'user_message_ack') {
+      if (!isCurrentSocket(nextSocket, conversationId) || !isPayloadForConversation(payload, conversationId)) {
+        return
+      }
+      const runtime = getRuntimeForConversation(conversationId)
+      runtime.currentRunId = payload.run_id
+      runtime.currentClientMessageId = payload.client_message_id ?? runtime.currentClientMessageId
+      runtime.currentRunStatus = payload.status === 'queued' ? 'queued' : payload.status
+      runtime.currentRunStatusMessage = ''
+      runtime.sending = isActiveRunStatus(runtime.currentRunStatus)
+      if (runtime.sending) {
+        startRunPolling(conversationId)
+      }
+      return
+    }
+
     if (payload.type === 'assistant_delta') {
       if (!isCurrentSocket(nextSocket, conversationId) || !isPayloadForConversation(payload, conversationId)) {
         return
@@ -427,6 +562,7 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       errorMessage.value = ''
       const runtime = getRuntimeForConversation(conversationId)
       currentRunId.value = payload.run_id ?? currentRunId.value
+      currentClientMessageId.value = payload.client_message_id ?? currentClientMessageId.value
       let target = findAssistantMessage(conversationId, runtime.activeAssistantMessageId, payload.run_id)
       if (!target) {
         runtime.activeAssistantMessageId = payload.message_id ?? `assistant-run-${payload.run_id ?? Date.now()}`
@@ -457,6 +593,7 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
         return
       }
       currentRunId.value = payload.run_id ?? currentRunId.value
+      currentClientMessageId.value = payload.client_message_id ?? currentClientMessageId.value
       currentRunStatus.value =
         payload.status === 'done' ? 'success' : payload.status === 'idle' ? '' : payload.status
       currentRunStatusMessage.value = payload.message ?? ''
@@ -464,7 +601,11 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
         outputFiles.value = payload.output_files
       }
       sending.value = isActiveRunStatus(currentRunStatus.value)
+      if (sending.value) {
+        startRunPolling(conversationId)
+      }
       if (!sending.value) {
+        stopRunPolling(conversationId)
         const target = findAssistantMessage(conversationId, activeAssistantMessageId.value, currentRunId.value ?? undefined)
         if (target) {
           target.streaming = false
@@ -487,6 +628,7 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
         return
       }
       currentRunId.value = payload.run_id ?? currentRunId.value
+      currentClientMessageId.value = payload.client_message_id ?? currentClientMessageId.value
       if (payload.output_files) {
         outputFiles.value = payload.output_files
       }
@@ -497,6 +639,7 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       }
       activeAssistantMessageId.value = null
       sending.value = false
+      stopRunPolling(conversationId)
       if (conversation.value?.id === conversationId) {
         const requestId = activeInitializeRequestId
         await loadHistory(conversationId, requestId)
@@ -543,6 +686,9 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
 
 function closeActiveSocket() {
   clearReconnectTimer()
+  if (socketConversationId !== null) {
+    stopRunPolling(socketConversationId)
+  }
   if (socket) {
     socket.onclose = null
     socket.onerror = null
@@ -777,18 +923,22 @@ async function sendMessage(content: string, fileIds: number[]) {
     return
   }
 
+  const clientMessageId = crypto.randomUUID()
   sending.value = true
   errorMessage.value = ''
   outputFiles.value = []
+  currentRunId.value = null
+  currentClientMessageId.value = clientMessageId
+  currentRunStatus.value = 'queued'
   currentRunStatusMessage.value = ''
   getMessagesForConversation(conversation.value.id).push({
-    id: `user-${Date.now()}`,
+    id: `user-${clientMessageId}`,
     conversation_id: conversation.value.id,
     run_id: null,
     role: 'user',
     content,
     created_at: new Date().toISOString(),
-    raw_payload: { file_ids: fileIds },
+    raw_payload: { file_ids: fileIds, client_message_id: clientMessageId },
     streaming: false,
   })
   messages.value = getMessagesForConversation(conversation.value.id)
@@ -799,6 +949,7 @@ async function sendMessage(content: string, fileIds: number[]) {
         type: 'user_message',
         content,
         file_ids: fileIds,
+        client_message_id: clientMessageId,
       }),
     )
     attachedFiles.value = []
@@ -870,6 +1021,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unmounted = true
   clearReconnectTimer()
+  stopRunPolling()
   if (socket) {
     socket.onclose = null
     socket.onerror = null

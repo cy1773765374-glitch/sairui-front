@@ -47,6 +47,7 @@ def _to_read(db: Session, run: TaskRun, agent: Agent | None = None) -> TaskRunRe
         agent_id=run.agent_id,
         agent_code=agent.code if agent else None,
         agent_name=agent.name if agent else None,
+        openclaw_agent_id=agent.openclaw_agent_id if agent else None,
         conversation_id=run.conversation_id,
         status=run.status,
         input_text=run.input_text,
@@ -57,6 +58,9 @@ def _to_read(db: Session, run: TaskRun, agent: Agent | None = None) -> TaskRunRe
         output_files_json=run.output_files_json,
         raw_payload=run.raw_payload,
         raw_payload_summary=_raw_payload_summary(db, run.id),
+        client_message_id=run.client_message_id,
+        gateway_session_key=run.gateway_session_key,
+        idempotency_key=run.idempotency_key,
         error_message=run.error_message,
         queued_at=run.queued_at,
         started_at=run.started_at,
@@ -79,6 +83,10 @@ def create_task_run(
     input_text: str,
     run_type: str = "chat",
     priority: int = 100,
+    client_message_id: str | None = None,
+    gateway_session_key: str | None = None,
+    idempotency_key: str | None = None,
+    raw_payload: dict | None = None,
 ) -> TaskRun:
     settings = get_settings()
     timeout_seconds = (
@@ -98,6 +106,10 @@ def create_task_run(
         queued_at=now,
         timeout_seconds=timeout_seconds,
         cancel_requested=False,
+        client_message_id=client_message_id,
+        gateway_session_key=gateway_session_key,
+        idempotency_key=idempotency_key,
+        raw_payload=raw_payload,
     )
     db.add(run)
     db.commit()
@@ -106,6 +118,22 @@ def create_task_run(
     db.commit()
     db.refresh(run)
     return run
+
+
+def get_task_run_by_client_message(
+    db: Session,
+    *,
+    conversation_id: int,
+    client_message_id: str | None,
+) -> TaskRun | None:
+    if not client_message_id:
+        return None
+    return db.scalar(
+        select(TaskRun)
+        .where(TaskRun.conversation_id == conversation_id)
+        .where(TaskRun.client_message_id == client_message_id)
+        .order_by(TaskRun.id.asc())
+    )
 
 
 def mark_task_run_queued(db: Session, run: TaskRun) -> TaskRun:
@@ -191,6 +219,11 @@ def upsert_assistant_message_for_run(
     content: str,
     raw_payload_patch: dict | None = None,
 ) -> Message:
+    if run.conversation_id is not None and conversation.id != run.conversation_id:
+        raise ValueError(
+            f"assistant message conversation mismatch: run_id={run.id} "
+            f"run_conversation_id={run.conversation_id} message_conversation_id={conversation.id}"
+        )
     message = db.scalars(
         select(Message)
         .where(Message.run_id == run.id)

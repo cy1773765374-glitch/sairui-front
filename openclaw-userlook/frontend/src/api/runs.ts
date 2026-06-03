@@ -25,6 +25,7 @@ export interface TaskRun {
   agent_id: number
   agent_code: string | null
   agent_name: string | null
+  openclaw_agent_id: string | null
   conversation_id: number | null
   status: TaskRunStatus
   input_text: string
@@ -35,6 +36,9 @@ export interface TaskRun {
   output_files_json: unknown | null
   raw_payload: unknown | null
   raw_payload_summary: unknown | null
+  client_message_id: string | null
+  gateway_session_key: string | null
+  idempotency_key: string | null
   error_message: string | null
   queued_at: string | null
   started_at: string | null

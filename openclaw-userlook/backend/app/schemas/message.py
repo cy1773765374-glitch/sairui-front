@@ -22,6 +22,7 @@ class WebSocketUserMessage(BaseModel):
     type: Literal["user_message"]
     content: str = Field(min_length=1, max_length=20000)
     file_ids: list[int] = Field(default_factory=list)
+    client_message_id: str | None = Field(default=None, max_length=80)
 
 
 class WebSocketCancelRunMessage(BaseModel):
