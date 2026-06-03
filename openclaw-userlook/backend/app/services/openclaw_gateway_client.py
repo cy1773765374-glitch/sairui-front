@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -20,7 +20,7 @@ from app.core.config import get_settings
 from app.models.agent import Agent
 from app.models.conversation import Conversation
 from app.models.user import User
-from app.services.gateway_session import build_gateway_session_identity
+from app.services.gateway_session import GatewaySessionIdentity, build_gateway_session_identity
 
 GATEWAY_UNAVAILABLE_MESSAGE = "OpenClaw Gateway connection failed; check openclaw-gateway.service"
 GATEWAY_HANDSHAKE_FAILED_MESSAGE = "OpenClaw Gateway handshake failed; check protocol, token, or permissions"
@@ -75,6 +75,8 @@ ATTRIBUTION_KEYS = {
     "client_message_id",
     "clientMessageId",
 }
+CHAT_SEND_PARAM_KEYS = {"sessionKey", "message", "deliver", "timeoutMs", "idempotencyKey", "attachments"}
+REQUIRED_CHAT_SEND_PARAM_KEYS = {"sessionKey", "message"}
 
 
 @dataclass(frozen=True)
@@ -147,11 +149,14 @@ class OpenClawGatewayClient:
             idempotency_key=idempotency_key,
         )
         headers = self._build_headers()
+        self._validate_chat_send_request(request_payload)
         request_id = str(request_payload.get("id") or "")
         params = request_payload.get("params") if isinstance(request_payload.get("params"), dict) else {}
         session_key = str(params.get("sessionKey") or "")
-        identity = build_gateway_session_identity(user, agent, conversation, run_id, client_message_id)
-        effective_client_message_id = identity.client_message_id
+        effective_client_message_id = (
+            self._extract_gateway_context_value(params.get("message"), "client_message_id")
+            or build_gateway_session_identity(user, agent, conversation, run_id, client_message_id).client_message_id
+        )
         recv_tick = max(1, recv_tick_seconds or get_settings().task_gateway_recv_tick_seconds)
         debug_events: list[dict[str, Any]] = []
 
@@ -532,10 +537,10 @@ class OpenClawGatewayClient:
             output_dir=output_dir,
             client_message_id=identity.client_message_id,
             gateway_session_key=session_key,
+            identity=identity,
         )
         params: dict[str, Any] = {
             "sessionKey": session_key,
-            "agentId": identity.openclaw_agent_id,
             "message": message,
             "deliver": False,
             "timeoutMs": self.timeout_seconds * 1000,
@@ -544,12 +549,39 @@ class OpenClawGatewayClient:
         attachments = self._build_attachments(files)
         if attachments:
             params["attachments"] = attachments
-        return {
+        payload = {
             "type": "req",
             "id": f"chat-{run_id or uuid4().hex}",
             "method": "chat.send",
             "params": params,
         }
+        self._validate_chat_send_request(payload)
+        return payload
+
+    def _validate_chat_send_request(self, payload: dict[str, Any]) -> None:
+        params = payload.get("params")
+        if payload.get("method") != "chat.send" or not isinstance(params, dict):
+            raise OpenClawGatewayConnectionError("Invalid local chat.send payload")
+        unexpected_keys = sorted(set(params) - CHAT_SEND_PARAM_KEYS)
+        if unexpected_keys:
+            raise OpenClawGatewayConnectionError(
+                f"Invalid local chat.send params: unexpected {', '.join(unexpected_keys)}"
+            )
+        missing_keys = sorted(REQUIRED_CHAT_SEND_PARAM_KEYS - set(params))
+        if missing_keys:
+            raise OpenClawGatewayConnectionError(
+                f"Invalid local chat.send params: missing {', '.join(missing_keys)}"
+            )
+
+    def _extract_gateway_context_value(self, message: Any, key: str) -> str | None:
+        if not isinstance(message, str):
+            return None
+        prefix = f"{key}="
+        for line in message.splitlines():
+            if line.startswith(prefix):
+                value = line[len(prefix):].strip()
+                return value or None
+        return None
 
     def _build_gateway_message(
         self,
@@ -562,9 +594,13 @@ class OpenClawGatewayClient:
         output_dir: str | None,
         client_message_id: str,
         gateway_session_key: str,
+        identity: GatewaySessionIdentity,
     ) -> str:
         context_lines = [
             "[openclaw-userlook context]",
+            f"channel={identity.channel}",
+            f"agent_code={identity.agent_code}",
+            f"openclaw_agent_id={identity.openclaw_agent_id}",
             f"user_id={user.id}",
             f"username={user.username}",
             f"conversation_id={conversation.id}",
@@ -588,15 +624,17 @@ class OpenClawGatewayClient:
             path = file.get("path") or file.get("stored_path")
             if not isinstance(path, str) or not path:
                 continue
-            attachments.append(
-                {
-                    "name": file.get("original_name") or path.rsplit("/", 1)[-1],
-                    "path": path,
-                    "mimeType": file.get("file_type"),
-                    "size": file.get("file_size"),
-                    "source": "openclaw-userlook",
-                }
-            )
+            fallback_name = PureWindowsPath(path).name if "\\" in path else Path(path).name
+            attachment: dict[str, Any] = {
+                "name": file.get("original_name") or fallback_name,
+                "path": path,
+                "source": "openclaw-userlook",
+            }
+            if file.get("file_type") is not None:
+                attachment["mimeType"] = file.get("file_type")
+            if file.get("file_size") is not None:
+                attachment["size"] = file.get("file_size")
+            attachments.append(attachment)
         return attachments
 
     def _parse_gateway_message(self, raw_message: str | bytes) -> OpenClawGatewayEvent:
