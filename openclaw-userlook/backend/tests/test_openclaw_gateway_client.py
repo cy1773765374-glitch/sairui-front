@@ -82,17 +82,9 @@ class OpenClawGatewayClientTest(unittest.TestCase):
 
         self.assertEqual(payload["method"], "chat.send")
         params = payload["params"]
+        self.assertEqual(set(params), {"sessionKey", "message", "deliver", "timeoutMs", "idempotencyKey"})
         self.assertEqual(params["deliver"], True)
         self.assertEqual(params["sessionKey"], "agent:mysql-analysis:web:7:mysql:11")
-        self.assertEqual(params["agentId"], "mysql-analysis")
-        self.assertEqual(params["agentCode"], "mysql")
-        self.assertEqual(params["channel"], "web_userlook")
-        self.assertEqual(params["source"], "openclaw-userlook")
-        self.assertEqual(params["userId"], "7")
-        self.assertEqual(params["conversationId"], "11")
-        self.assertEqual(params["runId"], "59")
-        self.assertEqual(params["clientMessageId"], "client-1")
-        self.assertEqual(params["outputDir"], "/data/openclaw-userlook/outputs/7/20260603/run_59")
         self.assertTrue(params["message"].endswith("\n\nwho are you"))
         self.assertIn("channel=web_userlook", params["message"])
         self.assertIn("agent_code=mysql", params["message"])
@@ -130,25 +122,25 @@ class OpenClawGatewayClientTest(unittest.TestCase):
             )
         )
 
-    def test_chat_send_guard_accepts_structured_agent_id_param(self) -> None:
+    def test_chat_send_guard_rejects_structured_agent_id_param(self) -> None:
         client = OpenClawGatewayClient(ws_url="ws://127.0.0.1:18789")
 
-        client._validate_chat_send_request(
-            {
-                "type": "req",
-                "id": "chat-59",
-                "method": "chat.send",
-                "params": {
-                    "sessionKey": "agent:mysql-analysis:web:7:mysql:11",
-                    "message": "who are you",
-                    "deliver": True,
-                    "timeoutMs": 300000,
-                    "idempotencyKey": "openclaw-userlook:59:client-1",
-                    "agentId": "mysql-analysis",
-                    "agent_id": "mysql-analysis",
-                },
-            }
-        )
+        with self.assertRaisesRegex(Exception, "unexpected agentId"):
+            client._validate_chat_send_request(
+                {
+                    "type": "req",
+                    "id": "chat-59",
+                    "method": "chat.send",
+                    "params": {
+                        "sessionKey": "agent:mysql-analysis:web:7:mysql:11",
+                        "message": "who are you",
+                        "deliver": True,
+                        "timeoutMs": 300000,
+                        "idempotencyKey": "openclaw-userlook:59:client-1",
+                        "agentId": "mysql-analysis",
+                    },
+                }
+            )
 
     def test_gateway_context_exposes_generated_client_message_id(self) -> None:
         client = OpenClawGatewayClient(ws_url="ws://127.0.0.1:18789")
@@ -290,8 +282,7 @@ class OpenClawGatewayClientStreamTest(unittest.IsolatedAsyncioTestCase):
         sent_payload = json.loads(fake_ws.sent_messages[0])
         self.assertEqual(sent_payload["method"], "chat.send")
         self.assertEqual(sent_payload["params"]["deliver"], True)
-        self.assertEqual(sent_payload["params"]["agentId"], "mysql-analysis")
-        self.assertEqual(sent_payload["params"]["clientMessageId"], "client-1")
+        self.assertEqual(set(sent_payload["params"]), {"sessionKey", "message", "deliver", "timeoutMs", "idempotencyKey"})
 
     async def test_stream_chat_records_health_frame_as_debug_only(self) -> None:
         client = OpenClawGatewayClient(ws_url="ws://127.0.0.1:18789", token="token", timeout_seconds=300)

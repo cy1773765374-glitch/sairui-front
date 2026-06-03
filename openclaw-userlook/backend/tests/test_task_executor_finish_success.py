@@ -172,7 +172,7 @@ class TaskExecutorFinishSuccessTest(unittest.IsolatedAsyncioTestCase):
                     type="error",
                     status="timeout",
                     content="OpenClaw Gateway response timed out",
-                    gateway_request={"method": "chat.send", "params": {"agentId": "mysql-analysis"}},
+                    gateway_request={"method": "chat.send", "params": {"sessionKey": "agent:mysql-analysis:web:7:mysql:11"}},
                     gateway_debug_events=[{"classification": "outbound_request"}],
                 )
 
