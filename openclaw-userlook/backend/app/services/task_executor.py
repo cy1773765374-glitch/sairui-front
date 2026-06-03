@@ -20,6 +20,7 @@ from app.services.run_service import (
     mark_task_run_running,
     mark_task_run_success,
     mark_task_run_timeout,
+    patch_task_run_raw_payload,
     touch_task_run_heartbeat,
     update_task_run_output,
     upsert_assistant_message_for_run,
@@ -219,6 +220,21 @@ async def _handle_terminal_error_event(
     else:
         run = mark_task_run_failed(db, run, event.content or "OpenClaw call failed", output_text=assistant_content or None)
 
+    error_payload = {
+        "partial": bool(assistant_content),
+        "streaming": False,
+        "status": terminal_status,
+        "timeout": terminal_status == "timeout",
+        "mock": False,
+        "gateway_request": event.gateway_request,
+        "gateway_event": event.raw,
+        "gateway_debug_events": gateway_debug_events or (event.gateway_debug_events or []),
+        "terminal_event_received": True,
+        "gateway_terminal_status": terminal_status,
+        "first_token_at": first_token_at.isoformat() if first_token_at else None,
+        "last_delta_at": last_delta_at.isoformat() if last_delta_at else None,
+    }
+    run = patch_task_run_raw_payload(db, run, error_payload, allow_terminal_update=True)
     output_files_payload: list = []
     if assistant_content:
         assistant_message = upsert_assistant_message_for_run(
@@ -226,15 +242,7 @@ async def _handle_terminal_error_event(
             run=run,
             conversation=conversation,
             content=assistant_content,
-            raw_payload_patch={
-                "partial": True,
-                "streaming": False,
-                "status": terminal_status,
-                "gateway_event": event.raw,
-                "gateway_debug_events": gateway_debug_events,
-                "first_token_at": first_token_at.isoformat() if first_token_at else None,
-                "last_delta_at": last_delta_at.isoformat() if last_delta_at else None,
-            },
+            raw_payload_patch=error_payload,
         )
         output_files = register_output_files(db, user.id, run.output_dir)
         output_files_payload = jsonable_encoder(output_files)
@@ -284,6 +292,7 @@ async def execute_chat_run(
     assistant_content = ""
     last_gateway_event: dict[str, Any] | None = None
     gateway_debug_events: list[dict[str, object]] = []
+    gateway_request: dict[str, Any] | None = None
     terminal_event_received = False
     gateway_terminal_status: str | None = None
     first_token_at: datetime | None = None
@@ -434,6 +443,8 @@ async def execute_chat_run(
                         idempotency_key=run.idempotency_key,
                     ):
                         last_gateway_event = event.raw
+                        if event.gateway_request:
+                            gateway_request = event.gateway_request
                         if event.gateway_debug_events:
                             gateway_debug_events = list(event.gateway_debug_events)
                         if cancel_event.is_set():
@@ -500,6 +511,7 @@ async def execute_chat_run(
                         if event.type == "done" or event.status == "success":
                             final_payload = {
                                 "mock": adapter.settings.mock_openclaw,
+                                "gateway_request": gateway_request or event.gateway_request,
                                 "gateway_event": event.raw,
                                 "terminal_event_received": terminal_event_received,
                                 "gateway_terminal_status": gateway_terminal_status,
@@ -535,6 +547,7 @@ async def execute_chat_run(
                 if can_assume_done:
                     final_payload = {
                         "mock": adapter.settings.mock_openclaw,
+                        "gateway_request": gateway_request,
                         "gateway_event": last_gateway_event,
                         "gateway_debug_events": gateway_debug_events,
                         "terminal_event_received": False,
@@ -559,17 +572,22 @@ async def execute_chat_run(
 
                 run = mark_task_run_timeout(db, run, "OpenClaw Gateway response timed out", output_text=assistant_content or None)
                 output_files_payload: list = []
+                timeout_payload = {
+                    "partial": bool(assistant_content),
+                    "streaming": False,
+                    "status": "timeout",
+                    "timeout": True,
+                    "mock": adapter.settings.mock_openclaw,
+                    "gateway_request": gateway_request,
+                    "gateway_event": last_gateway_event,
+                    "gateway_debug_events": gateway_debug_events,
+                    "terminal_event_received": terminal_event_received,
+                    "gateway_terminal_status": gateway_terminal_status,
+                    "first_token_at": first_token_at.isoformat() if first_token_at else None,
+                    "last_delta_at": last_delta_at.isoformat() if last_delta_at else None,
+                }
+                run = patch_task_run_raw_payload(db, run, timeout_payload, allow_terminal_update=True)
                 if assistant_content:
-                    timeout_payload = {
-                        "partial": True,
-                        "streaming": False,
-                        "status": "timeout",
-                        "timeout": True,
-                        "gateway_event": last_gateway_event,
-                        "gateway_debug_events": gateway_debug_events,
-                        "first_token_at": first_token_at.isoformat() if first_token_at else None,
-                        "last_delta_at": last_delta_at.isoformat() if last_delta_at else None,
-                    }
                     persist_output(force=True, status_value="timeout", extra=timeout_payload)
                     assistant_message = upsert_assistant_message_for_run(
                         db,
@@ -608,6 +626,7 @@ async def execute_chat_run(
                 )
                 final_payload = {
                     "mock": adapter.settings.mock_openclaw,
+                    "gateway_request": gateway_request,
                     "gateway_event": last_gateway_event,
                     "gateway_debug_events": gateway_debug_events,
                     "terminal_event_received": False,
@@ -631,6 +650,23 @@ async def execute_chat_run(
                 return
 
             run = mark_task_run_failed(db, run, "OpenClaw stream ended without output")
+            run = patch_task_run_raw_payload(
+                db,
+                run,
+                {
+                    "streaming": False,
+                    "status": "failed",
+                    "mock": adapter.settings.mock_openclaw,
+                    "gateway_request": gateway_request,
+                    "gateway_event": last_gateway_event,
+                    "gateway_debug_events": gateway_debug_events,
+                    "terminal_event_received": terminal_event_received,
+                    "gateway_terminal_status": gateway_terminal_status,
+                    "first_token_at": first_token_at.isoformat() if first_token_at else None,
+                    "last_delta_at": last_delta_at.isoformat() if last_delta_at else None,
+                },
+                allow_terminal_update=True,
+            )
             await _broadcast_run_status(
                 conversation_id,
                 run_id=run.id,
@@ -656,6 +692,7 @@ async def execute_chat_run(
                             "streaming": False,
                             "status": "cancelled",
                             "cancelled": True,
+                            "gateway_request": gateway_request,
                             "gateway_event": last_gateway_event,
                             "gateway_debug_events": gateway_debug_events,
                             "first_token_at": first_token_at.isoformat() if first_token_at else None,
@@ -683,21 +720,27 @@ async def execute_chat_run(
             conversation = db.get(Conversation, conversation_id)
             if run is not None and run.status not in TERMINAL_RUN_STATUSES:
                 run = mark_task_run_failed(db, run, str(exc) or "OpenClaw call failed", output_text=assistant_content or None)
+                failed_payload = {
+                    "partial": bool(assistant_content),
+                    "streaming": False,
+                    "status": "failed",
+                    "mock": adapter.settings.mock_openclaw,
+                    "gateway_request": gateway_request,
+                    "gateway_event": last_gateway_event,
+                    "gateway_debug_events": gateway_debug_events,
+                    "terminal_event_received": terminal_event_received,
+                    "gateway_terminal_status": gateway_terminal_status,
+                    "first_token_at": first_token_at.isoformat() if first_token_at else None,
+                    "last_delta_at": last_delta_at.isoformat() if last_delta_at else None,
+                }
+                run = patch_task_run_raw_payload(db, run, failed_payload, allow_terminal_update=True)
                 if assistant_content and conversation is not None:
                     upsert_assistant_message_for_run(
                         db,
                         run=run,
                         conversation=conversation,
                         content=assistant_content,
-                        raw_payload_patch={
-                            "partial": True,
-                            "streaming": False,
-                            "status": "failed",
-                            "gateway_event": last_gateway_event,
-                            "gateway_debug_events": gateway_debug_events,
-                            "first_token_at": first_token_at.isoformat() if first_token_at else None,
-                            "last_delta_at": last_delta_at.isoformat() if last_delta_at else None,
-                        },
+                        raw_payload_patch=failed_payload,
                     )
                 await connection_manager.broadcast_json(
                     conversation_id,

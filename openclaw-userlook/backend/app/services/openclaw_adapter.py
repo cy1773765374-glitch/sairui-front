@@ -31,6 +31,7 @@ class OpenClawAdapterEvent:
     raw: dict[str, Any] | None = None
     assumed_done_after_text_silence: bool = False
     gateway_debug_events: list[dict[str, Any]] | None = None
+    gateway_request: dict[str, Any] | None = None
 
 
 class OpenClawAdapter:
@@ -45,6 +46,8 @@ class OpenClawAdapter:
             token=self.settings.openclaw_gateway_token,
             password=self.settings.openclaw_gateway_password,
             timeout_seconds=self.settings.openclaw_gateway_timeout_seconds,
+            deliver=self.settings.openclaw_gateway_deliver,
+            max_concurrency=self.settings.openclaw_gateway_max_concurrency,
         )
 
     async def stream_chat(
@@ -103,10 +106,18 @@ class OpenClawAdapter:
                     raw=event.raw,
                     assumed_done_after_text_silence=event.assumed_done_after_text_silence,
                     gateway_debug_events=event.gateway_debug_events,
+                    gateway_request=event.gateway_request,
                 )
         except OpenClawGatewayConnectionError as exc:
             message = str(exc) or GATEWAY_UNAVAILABLE_MESSAGE
-            yield OpenClawAdapterEvent(type="error", content=message)
+            yield OpenClawAdapterEvent(
+                type="error",
+                content=message,
+                status="timeout" if "timed out" in message.lower() else "failed",
+                raw=exc.gateway_event,
+                gateway_debug_events=exc.gateway_debug_events,
+                gateway_request=exc.gateway_request,
+            )
 
     async def _mock_stream(
         self,

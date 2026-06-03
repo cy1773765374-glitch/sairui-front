@@ -5,7 +5,7 @@ import base64
 import hashlib
 import json
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any, Literal
@@ -62,7 +62,15 @@ DELTA_EVENTS = {
     "text",
 }
 STATUS_EVENTS = PENDING_STATES | RUNNING_STATES | {"run_status", "status", "state"}
-GLOBAL_GATEWAY_EVENTS = {"health", "presence", "sessions.list", "sessions_list", "state", "diagnostic", "heartbeat"}
+GLOBAL_GATEWAY_EVENTS = {
+    "health",
+    "presence",
+    "sessions.list",
+    "sessions_list",
+    "state",
+    "diagnostic",
+    "heartbeat",
+}
 ATTRIBUTION_KEYS = {
     "run_id",
     "runId",
@@ -75,8 +83,46 @@ ATTRIBUTION_KEYS = {
     "client_message_id",
     "clientMessageId",
 }
-CHAT_SEND_PARAM_KEYS = {"sessionKey", "message", "deliver", "timeoutMs", "idempotencyKey", "attachments"}
+CHAT_SEND_PARAM_KEYS = {
+    "sessionKey",
+    "message",
+    "deliver",
+    "timeoutMs",
+    "idempotencyKey",
+    "attachments",
+    "agentId",
+    "agent_id",
+    "openclawAgentId",
+    "openclaw_agent_id",
+    "agentCode",
+    "agent_code",
+    "channel",
+    "source",
+    "userId",
+    "user_id",
+    "conversationId",
+    "conversation_id",
+    "runId",
+    "run_id",
+    "clientMessageId",
+    "client_message_id",
+    "outputDir",
+    "output_dir",
+}
 REQUIRED_CHAT_SEND_PARAM_KEYS = {"sessionKey", "message"}
+SOURCE = "openclaw-userlook"
+DEBUG_EVENT_LIMIT = 50
+REDACTED = "***REDACTED***"
+SENSITIVE_KEY_PARTS = (
+    "token",
+    "password",
+    "signature",
+    "private",
+    "secret",
+    "authorization",
+)
+_gateway_semaphore: asyncio.Semaphore | None = None
+_gateway_semaphore_limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -88,10 +134,66 @@ class OpenClawGatewayEvent:
     raw: dict[str, Any] | None = None
     assumed_done_after_text_silence: bool = False
     gateway_debug_events: list[dict[str, Any]] | None = None
+    gateway_request: dict[str, Any] | None = None
 
 
 class OpenClawGatewayConnectionError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        gateway_request: dict[str, Any] | None = None,
+        gateway_debug_events: list[dict[str, Any]] | None = None,
+        gateway_event: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.gateway_request = gateway_request
+        self.gateway_debug_events = gateway_debug_events or []
+        self.gateway_event = gateway_event
+
+
+class GatewayDebugCollector:
+    def __init__(self, limit: int = DEBUG_EVENT_LIMIT) -> None:
+        self.limit = max(1, limit)
+        self.events: list[dict[str, Any]] = []
+
+    def record(
+        self,
+        classification: str,
+        *,
+        direction: str,
+        payload: Any | None = None,
+        event_type: str | None = None,
+    ) -> None:
+        item: dict[str, Any] = {
+            "at": int(time.time() * 1000),
+            "direction": direction,
+            "classification": classification,
+        }
+        if event_type:
+            item["event_type"] = event_type
+        if payload is not None:
+            item["payload"] = sanitize_gateway_payload(payload)
+        self.events.append(item)
+        self.events[:] = self.events[-self.limit:]
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        return list(self.events)
+
+
+def sanitize_gateway_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key).lower()
+            if any(part in key_text for part in SENSITIVE_KEY_PARTS):
+                sanitized[key] = REDACTED
+            else:
+                sanitized[key] = sanitize_gateway_payload(item)
+        return sanitized
+    if isinstance(value, list):
+        return [sanitize_gateway_payload(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -109,12 +211,24 @@ class OpenClawGatewayClient:
         password: str = "",
         timeout_seconds: int = 300,
         device_identity_path: str | None = None,
+        deliver: bool | None = None,
+        max_concurrency: int | None = None,
     ) -> None:
         self.ws_url = ws_url
         self.token = token
         self.password = password
         self.timeout_seconds = timeout_seconds
         self.device_identity_path = device_identity_path
+        settings = get_settings()
+        self.deliver = settings.openclaw_gateway_deliver if deliver is None else deliver
+        self.max_concurrency = max(1, max_concurrency or settings.openclaw_gateway_max_concurrency)
+
+    def _get_gateway_semaphore(self) -> asyncio.Semaphore:
+        global _gateway_semaphore, _gateway_semaphore_limit
+        if _gateway_semaphore is None or _gateway_semaphore_limit != self.max_concurrency:
+            _gateway_semaphore = asyncio.Semaphore(self.max_concurrency)
+            _gateway_semaphore_limit = self.max_concurrency
+        return _gateway_semaphore
 
     async def stream_chat(
         self,
@@ -134,6 +248,8 @@ class OpenClawGatewayClient:
         client_message_id: str | None = None,
         gateway_session_key: str | None = None,
         idempotency_key: str | None = None,
+        debug_collector: GatewayDebugCollector | None = None,
+        debug_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> AsyncIterator[OpenClawGatewayEvent]:
         request_payload = self._build_chat_request(
             user=user,
@@ -150,6 +266,11 @@ class OpenClawGatewayClient:
         )
         headers = self._build_headers()
         self._validate_chat_send_request(request_payload)
+        collector = debug_collector or GatewayDebugCollector()
+        collector.record("outbound_request", direction="outbound", payload=request_payload)
+        if debug_callback is not None:
+            debug_callback(collector.snapshot()[-1])
+        sanitized_request = sanitize_gateway_payload(request_payload)
         request_id = str(request_payload.get("id") or "")
         params = request_payload.get("params") if isinstance(request_payload.get("params"), dict) else {}
         session_key = str(params.get("sessionKey") or "")
@@ -158,76 +279,83 @@ class OpenClawGatewayClient:
             or build_gateway_session_identity(user, agent, conversation, run_id, client_message_id).client_message_id
         )
         recv_tick = max(1, recv_tick_seconds or get_settings().task_gateway_recv_tick_seconds)
-        debug_events: list[dict[str, Any]] = []
 
         try:
-            async with websockets.connect(
-                self.ws_url,
-                additional_headers=headers,
-                open_timeout=5,
-                close_timeout=5,
-                ping_interval=20,
-                ping_timeout=20,
-            ) as gateway_ws:
-                await self._connect_gateway(gateway_ws)
-                await gateway_ws.send(json.dumps(request_payload, ensure_ascii=False))
-                has_text_output = False
-                last_text_at: float | None = None
-                started_at = time.monotonic()
+            async with self._get_gateway_semaphore():
+                async with websockets.connect(
+                    self.ws_url,
+                    additional_headers=headers,
+                    open_timeout=5,
+                    close_timeout=5,
+                    ping_interval=20,
+                    ping_timeout=20,
+                ) as gateway_ws:
+                    await self._connect_gateway(gateway_ws)
+                    await gateway_ws.send(json.dumps(request_payload, ensure_ascii=False))
+                    has_text_output = False
+                    last_text_at: float | None = None
+                    started_at = time.monotonic()
 
-                while True:
-                    if cancel_event is not None and cancel_event.is_set():
-                        await gateway_ws.close()
-                        raise asyncio.CancelledError
+                    while True:
+                        if cancel_event is not None and cancel_event.is_set():
+                            await gateway_ws.close()
+                            raise asyncio.CancelledError
 
-                    if (
-                        assume_done_after_text_silence
-                        and has_text_output
-                        and last_text_at is not None
-                        and final_silence_seconds is not None
-                        and time.monotonic() - last_text_at >= final_silence_seconds
-                    ):
-                        yield self._silent_success_event(debug_events)
-                        return
-
-                    try:
-                        raw_message = await self._recv_with_cancel(
-                            gateway_ws,
-                            cancel_event=cancel_event,
-                            timeout=recv_tick,
-                        )
-                    except ConnectionClosedOK as exc:
-                        if has_text_output:
-                            return
-                        raise OpenClawGatewayConnectionError("OpenClaw stream ended without output") from exc
-                    except asyncio.TimeoutError:
-                        if time.monotonic() - started_at >= self.timeout_seconds:
-                            if assume_done_after_text_silence and has_text_output:
-                                yield self._silent_success_event(debug_events)
-                                return
-                            raise OpenClawGatewayConnectionError("OpenClaw Gateway response timed out")
-                        continue
-
-                    frame = self._decode_json_frame(raw_message)
-                    if isinstance(frame, dict):
-                        if self.is_global_gateway_event(frame):
-                            debug_events.append(self.summarize_gateway_event(frame))
-                            debug_events[:] = debug_events[-5:]
-                            continue
-                        if not self._is_frame_for_current_run(
-                            frame,
-                            run_id=run_id,
-                            request_id=request_id,
-                            session_key=session_key,
-                            conversation_id=conversation.id,
-                            client_message_id=effective_client_message_id,
+                        if (
+                            assume_done_after_text_silence
+                            and has_text_output
+                            and last_text_at is not None
+                            and final_silence_seconds is not None
+                            and time.monotonic() - last_text_at >= final_silence_seconds
                         ):
-                            debug_events.append(self.summarize_gateway_event(frame))
-                            debug_events[:] = debug_events[-5:]
+                            yield self._silent_success_event(collector, sanitized_request)
+                            return
+
+                        try:
+                            raw_message = await self._recv_with_cancel(
+                                gateway_ws,
+                                cancel_event=cancel_event,
+                                timeout=recv_tick,
+                            )
+                        except ConnectionClosedOK as exc:
+                            if has_text_output:
+                                return
+                            raise OpenClawGatewayConnectionError(
+                                "OpenClaw stream ended without output",
+                                gateway_request=sanitized_request,
+                                gateway_debug_events=collector.snapshot(),
+                            ) from exc
+                        except asyncio.TimeoutError:
+                            if time.monotonic() - started_at >= self.timeout_seconds:
+                                if assume_done_after_text_silence and has_text_output:
+                                    yield self._silent_success_event(collector, sanitized_request)
+                                    return
+                                raise OpenClawGatewayConnectionError(
+                                    "OpenClaw Gateway response timed out",
+                                    gateway_request=sanitized_request,
+                                    gateway_debug_events=collector.snapshot(),
+                                )
                             continue
 
-                    event = self._parse_gateway_payload(frame)
-                    if debug_events:
+                        frame = self._decode_json_frame(raw_message)
+                        if isinstance(frame, dict):
+                            if self.is_global_gateway_event(frame):
+                                self._record_debug(collector, debug_callback, "global_ignored", frame)
+                                continue
+                            if not self._is_frame_for_current_run(
+                                frame,
+                                run_id=run_id,
+                                request_id=request_id,
+                                session_key=session_key,
+                                conversation_id=conversation.id,
+                                client_message_id=effective_client_message_id,
+                            ):
+                                self._record_debug(collector, debug_callback, "attribution_mismatch", frame)
+                                continue
+
+                        event = self._parse_gateway_payload(frame)
+                        classification = self._classification_for_event(event)
+                        self._record_debug(collector, debug_callback, classification, frame, event.type)
                         event = OpenClawGatewayEvent(
                             type=event.type,
                             content=event.content,
@@ -235,18 +363,23 @@ class OpenClawGatewayClient:
                             output_dir=event.output_dir,
                             raw=event.raw,
                             assumed_done_after_text_silence=event.assumed_done_after_text_silence,
-                            gateway_debug_events=list(debug_events),
+                            gateway_debug_events=collector.snapshot(),
+                            gateway_request=sanitized_request,
                         )
-                    if event.content and (event.type == "delta" or event.status == "success"):
-                        has_text_output = True
-                        last_text_at = time.monotonic()
-                    yield event
-                    if event.type in {"done", "error"}:
-                        break
+                        if event.content and (event.type == "delta" or event.status == "success"):
+                            has_text_output = True
+                            last_text_at = time.monotonic()
+                        yield event
+                        if event.type in {"done", "error"}:
+                            break
         except OpenClawGatewayConnectionError:
             raise
         except (OSError, WebSocketException, TimeoutError, asyncio.TimeoutError) as exc:
-            raise OpenClawGatewayConnectionError(GATEWAY_UNAVAILABLE_MESSAGE) from exc
+            raise OpenClawGatewayConnectionError(
+                GATEWAY_UNAVAILABLE_MESSAGE,
+                gateway_request=sanitized_request,
+                gateway_debug_events=collector.snapshot(),
+            ) from exc
 
     async def _recv_with_cancel(
         self,
@@ -276,7 +409,11 @@ class OpenClawGatewayClient:
             raise asyncio.CancelledError
         return recv_task.result()
 
-    def _silent_success_event(self, debug_events: list[dict[str, Any]]) -> OpenClawGatewayEvent:
+    def _silent_success_event(
+        self,
+        collector: GatewayDebugCollector,
+        sanitized_request: dict[str, Any],
+    ) -> OpenClawGatewayEvent:
         return OpenClawGatewayEvent(
             type="done",
             status="success",
@@ -286,8 +423,35 @@ class OpenClawGatewayClient:
                 "assumed_done_after_text_silence": True,
             },
             assumed_done_after_text_silence=True,
-            gateway_debug_events=list(debug_events),
+            gateway_debug_events=collector.snapshot(),
+            gateway_request=sanitized_request,
         )
+
+    def _record_debug(
+        self,
+        collector: GatewayDebugCollector,
+        callback: Callable[[dict[str, Any]], None] | None,
+        classification: str,
+        payload: Any,
+        event_type: str | None = None,
+    ) -> None:
+        collector.record(
+            classification,
+            direction="inbound",
+            payload=payload,
+            event_type=event_type,
+        )
+        if callback is not None:
+            callback(collector.snapshot()[-1])
+
+    def _classification_for_event(self, event: OpenClawGatewayEvent) -> str:
+        if event.type == "delta":
+            return "parsed_delta"
+        if event.type == "done":
+            return "parsed_done"
+        if event.type == "error":
+            return "parsed_error"
+        return "parsed_run_status"
 
     def _build_headers(self) -> dict[str, str]:
         if not self.token:
@@ -542,10 +706,21 @@ class OpenClawGatewayClient:
         params: dict[str, Any] = {
             "sessionKey": session_key,
             "message": message,
-            "deliver": False,
+            "deliver": self.deliver,
             "timeoutMs": self.timeout_seconds * 1000,
             "idempotencyKey": effective_idempotency_key,
+            "agentId": identity.openclaw_agent_id,
+            "agentCode": identity.agent_code,
+            "channel": identity.channel,
+            "source": SOURCE,
+            "userId": str(identity.user_id),
+            "conversationId": str(identity.conversation_id),
+            "clientMessageId": identity.client_message_id,
         }
+        if run_id is not None:
+            params["runId"] = str(run_id)
+        if output_dir:
+            params["outputDir"] = output_dir
         attachments = self._build_attachments(files)
         if attachments:
             params["attachments"] = attachments
@@ -659,15 +834,15 @@ class OpenClawGatewayClient:
             if isinstance(result_payload, str):
                 return OpenClawGatewayEvent(type="done", content=result_payload, status="success", raw=payload)
             if isinstance(result_payload, dict):
-                if self._is_terminal_response(result_payload):
+                text = self._extract_text(result_payload)
+                if text and self._is_terminal_response(result_payload):
                     return OpenClawGatewayEvent(
                         type="done",
-                        content=self._extract_text(result_payload),
+                        content=text,
                         status="success",
                         output_dir=self._extract_output_dir(result_payload),
                         raw=payload,
                     )
-                text = self._extract_text(result_payload)
                 status_value = self._extract_status(result_payload)
                 normalized_status = self._normalize_state_token(status_value)
                 if normalized_status in TIMEOUT_STATES:
@@ -688,10 +863,11 @@ class OpenClawGatewayClient:
                     return OpenClawGatewayEvent(type="delta", content=text, raw=payload)
                 return OpenClawGatewayEvent(
                     type="run_status",
-                    status=self._normalize_run_status(status_value or "running"),
+                    status=self._normalize_run_status("running"),
                     raw=payload,
                 )
 
+        event_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
         event_type = self._normalize_state_token(
             payload.get("event")
             if payload.get("type") == "event"
@@ -701,7 +877,13 @@ class OpenClawGatewayClient:
             or payload.get("state")
             or ""
         )
-        status_value = self._normalize_state_token(payload.get("status") or payload.get("state") or "")
+        status_value = self._normalize_state_token(
+            payload.get("status")
+            or payload.get("state")
+            or (event_payload.get("status") if isinstance(event_payload, dict) else "")
+            or (event_payload.get("state") if isinstance(event_payload, dict) else "")
+            or ""
+        )
         normalized_state = status_value or event_type
         event_kind = self._classify_event_type(normalized_state)
 
@@ -714,20 +896,20 @@ class OpenClawGatewayClient:
         if normalized_state in SUCCESS_STATES or event_kind == "done":
             return OpenClawGatewayEvent(
                 type="done",
-                content=self._extract_text(payload),
+                content=self._extract_text(event_payload if isinstance(event_payload, dict) else payload),
                 status="success",
-                output_dir=self._extract_output_dir(payload),
+                output_dir=self._extract_output_dir(event_payload if isinstance(event_payload, dict) else payload),
                 raw=payload,
             )
         if event_type in STATUS_EVENTS or event_kind == "run_status":
             return OpenClawGatewayEvent(
                 type="run_status",
                 status=self._normalize_run_status(status_value or event_type),
-                content=self._extract_text(payload),
+                content=self._extract_text(event_payload if isinstance(event_payload, dict) else payload),
                 raw=payload,
             )
 
-        text = self._extract_text(payload)
+        text = self._extract_text(event_payload if isinstance(event_payload, dict) else payload)
         if (event_type in DELTA_EVENTS or event_kind == "delta") and text:
             return OpenClawGatewayEvent(type="delta", content=text, raw=payload)
         if text:

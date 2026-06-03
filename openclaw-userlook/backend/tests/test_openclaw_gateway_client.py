@@ -1,3 +1,4 @@
+import asyncio
 import json
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -6,7 +7,7 @@ from app.models.agent import Agent, AgentRiskLevel
 from app.models.conversation import Conversation
 from app.models.user import User, UserRole, UserStatus
 from app.services.gateway_session import build_gateway_session_identity
-from app.services.openclaw_gateway_client import OpenClawGatewayClient, OpenClawGatewayConnectionError
+from app.services.openclaw_gateway_client import OpenClawGatewayClient
 
 
 def make_user() -> User:
@@ -81,8 +82,17 @@ class OpenClawGatewayClientTest(unittest.TestCase):
 
         self.assertEqual(payload["method"], "chat.send")
         params = payload["params"]
-        self.assertEqual(set(params), {"sessionKey", "message", "deliver", "timeoutMs", "idempotencyKey"})
+        self.assertEqual(params["deliver"], True)
         self.assertEqual(params["sessionKey"], "agent:mysql-analysis:web:7:mysql:11")
+        self.assertEqual(params["agentId"], "mysql-analysis")
+        self.assertEqual(params["agentCode"], "mysql")
+        self.assertEqual(params["channel"], "web_userlook")
+        self.assertEqual(params["source"], "openclaw-userlook")
+        self.assertEqual(params["userId"], "7")
+        self.assertEqual(params["conversationId"], "11")
+        self.assertEqual(params["runId"], "59")
+        self.assertEqual(params["clientMessageId"], "client-1")
+        self.assertEqual(params["outputDir"], "/data/openclaw-userlook/outputs/7/20260603/run_59")
         self.assertTrue(params["message"].endswith("\n\nwho are you"))
         self.assertIn("channel=web_userlook", params["message"])
         self.assertIn("agent_code=mysql", params["message"])
@@ -120,25 +130,25 @@ class OpenClawGatewayClientTest(unittest.TestCase):
             )
         )
 
-    def test_chat_send_guard_rejects_unexpected_agent_id_param(self) -> None:
+    def test_chat_send_guard_accepts_structured_agent_id_param(self) -> None:
         client = OpenClawGatewayClient(ws_url="ws://127.0.0.1:18789")
 
-        with self.assertRaisesRegex(OpenClawGatewayConnectionError, "unexpected agentId"):
-            client._validate_chat_send_request(
-                {
-                    "type": "req",
-                    "id": "chat-59",
-                    "method": "chat.send",
-                    "params": {
-                        "sessionKey": "agent:mysql-analysis:web:7:mysql:11",
-                        "message": "who are you",
-                        "deliver": False,
-                        "timeoutMs": 300000,
-                        "idempotencyKey": "openclaw-userlook:59:client-1",
-                        "agentId": "mysql-analysis",
-                    },
-                }
-            )
+        client._validate_chat_send_request(
+            {
+                "type": "req",
+                "id": "chat-59",
+                "method": "chat.send",
+                "params": {
+                    "sessionKey": "agent:mysql-analysis:web:7:mysql:11",
+                    "message": "who are you",
+                    "deliver": True,
+                    "timeoutMs": 300000,
+                    "idempotencyKey": "openclaw-userlook:59:client-1",
+                    "agentId": "mysql-analysis",
+                    "agent_id": "mysql-analysis",
+                },
+            }
+        )
 
     def test_gateway_context_exposes_generated_client_message_id(self) -> None:
         client = OpenClawGatewayClient(ws_url="ws://127.0.0.1:18789")
@@ -190,7 +200,7 @@ class OpenClawGatewayClientTest(unittest.TestCase):
             idempotency_key=None,
         )
 
-        self.assertEqual(set(payload["params"]), {"sessionKey", "message", "deliver", "timeoutMs", "idempotencyKey", "attachments"})
+        self.assertIn("attachments", payload["params"])
         self.assertEqual(
             payload["params"]["attachments"],
             [
@@ -209,6 +219,37 @@ class OpenClawGatewayClientTest(unittest.TestCase):
             ],
         )
 
+    def test_ack_only_response_is_run_status_not_done(self) -> None:
+        client = OpenClawGatewayClient(ws_url="ws://127.0.0.1:18789")
+
+        event = client._parse_gateway_payload(
+            {"type": "res", "id": "chat-59", "ok": True, "payload": {"status": "success"}}
+        )
+
+        self.assertEqual(event.type, "run_status")
+        self.assertEqual(event.status, "running")
+
+    def test_parse_assistant_delta_done_error_and_nested_text(self) -> None:
+        client = OpenClawGatewayClient(ws_url="ws://127.0.0.1:18789")
+
+        delta = client._parse_gateway_payload(
+            {"type": "event", "event": "assistant_delta", "payload": {"delta": "hello"}}
+        )
+        done = client._parse_gateway_payload(
+            {"type": "event", "event": "done", "payload": {"answer": {"content": "final"}}}
+        )
+        error = client._parse_gateway_payload(
+            {"type": "event", "event": "error", "payload": {"message": "bad gateway"}}
+        )
+
+        self.assertEqual(delta.type, "delta")
+        self.assertEqual(delta.content, "hello")
+        self.assertEqual(done.type, "done")
+        self.assertEqual(done.content, "final")
+        self.assertEqual(error.type, "error")
+        self.assertEqual(error.status, "failed")
+        self.assertEqual(error.content, "bad gateway")
+
 
 class OpenClawGatewayClientStreamTest(unittest.IsolatedAsyncioTestCase):
     async def test_stream_chat_sends_gateway_compatible_payload(self) -> None:
@@ -217,7 +258,13 @@ class OpenClawGatewayClientStreamTest(unittest.IsolatedAsyncioTestCase):
             token="token",
             timeout_seconds=300,
         )
-        fake_ws = FakeGatewayWebSocket()
+        fake_ws = FakeGatewayWebSocket(
+            [
+                {"type": "res", "id": "chat-59", "ok": True, "payload": {"status": "success"}},
+                {"type": "event", "event": "assistant_delta", "payload": {"delta": "ok"}},
+                {"type": "event", "event": "done", "payload": {"status": "success"}},
+            ]
+        )
 
         with patch("app.services.openclaw_gateway_client.websockets.connect", return_value=FakeGatewayConnection(fake_ws)):
             client._connect_gateway = AsyncMock(return_value=None)
@@ -238,12 +285,46 @@ class OpenClawGatewayClientStreamTest(unittest.IsolatedAsyncioTestCase):
                 )
             ]
 
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].type, "done")
-        self.assertEqual(events[0].content, "ok")
+        self.assertEqual([event.type for event in events], ["run_status", "delta", "done"])
+        self.assertEqual(events[1].content, "ok")
         sent_payload = json.loads(fake_ws.sent_messages[0])
         self.assertEqual(sent_payload["method"], "chat.send")
-        self.assertEqual(set(sent_payload["params"]), {"sessionKey", "message", "deliver", "timeoutMs", "idempotencyKey"})
+        self.assertEqual(sent_payload["params"]["deliver"], True)
+        self.assertEqual(sent_payload["params"]["agentId"], "mysql-analysis")
+        self.assertEqual(sent_payload["params"]["clientMessageId"], "client-1")
+
+    async def test_stream_chat_records_health_frame_as_debug_only(self) -> None:
+        client = OpenClawGatewayClient(ws_url="ws://127.0.0.1:18789", token="token", timeout_seconds=300)
+        fake_ws = FakeGatewayWebSocket(
+            [
+                {"type": "event", "event": "health", "payload": {"status": "ok"}},
+                {"type": "event", "event": "assistant_delta", "payload": {"delta": "hello"}},
+                {"type": "event", "event": "done", "payload": {"status": "success"}},
+            ]
+        )
+
+        with patch("app.services.openclaw_gateway_client.websockets.connect", return_value=FakeGatewayConnection(fake_ws)):
+            client._connect_gateway = AsyncMock(return_value=None)
+            events = [
+                event
+                async for event in client.stream_chat(
+                    user=make_user(),
+                    agent=make_agent(),
+                    conversation=make_conversation(),
+                    content="who are you",
+                    file_ids=[],
+                    files=[],
+                    run_id=59,
+                    output_dir=None,
+                    client_message_id="client-1",
+                    gateway_session_key="agent:mysql-analysis:web:7:mysql:11",
+                    idempotency_key="openclaw-userlook:59:client-1",
+                )
+            ]
+
+        self.assertEqual([event.type for event in events], ["delta", "done"])
+        debug_events = events[0].gateway_debug_events or []
+        self.assertTrue(any(item["classification"] == "global_ignored" for item in debug_events))
 
 
 class FakeGatewayConnection:
@@ -258,21 +339,18 @@ class FakeGatewayConnection:
 
 
 class FakeGatewayWebSocket:
-    def __init__(self) -> None:
+    def __init__(self, frames: list[dict[str, object]]) -> None:
         self.sent_messages: list[str] = []
+        self.frames = list(frames)
 
     async def send(self, message: str) -> None:
         self.sent_messages.append(message)
 
     async def recv(self) -> str:
-        return json.dumps(
-            {
-                "type": "res",
-                "id": "chat-59",
-                "ok": True,
-                "payload": {"status": "success", "response": "ok"},
-            }
-        )
+        if not self.frames:
+            await asyncio.sleep(0)
+            raise asyncio.TimeoutError
+        return json.dumps(self.frames.pop(0))
 
     async def close(self) -> None:
         return None

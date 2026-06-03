@@ -22,6 +22,8 @@ class Settings(BaseSettings):
         default=300,
         alias="OPENCLAW_GATEWAY_TIMEOUT_SECONDS",
     )
+    openclaw_gateway_deliver: bool = Field(default=True, alias="OPENCLAW_GATEWAY_DELIVER")
+    openclaw_gateway_max_concurrency: int = Field(default=1, alias="OPENCLAW_GATEWAY_MAX_CONCURRENCY")
     task_chat_timeout_seconds: int = Field(default=120, alias="TASK_CHAT_TIMEOUT_SECONDS")
     task_short_chat_timeout_seconds: int = Field(default=600, alias="TASK_SHORT_CHAT_TIMEOUT_SECONDS")
     task_gateway_final_silence_seconds: int = Field(default=10, alias="TASK_GATEWAY_FINAL_SILENCE_SECONDS")
