@@ -35,7 +35,7 @@ python -m app.init_db
 
 This also creates the default admin user when `DEFAULT_ADMIN_USERNAME` does not exist and seeds the preset Agents.
 
-For existing Phase 10 databases, run the Phase 11 idempotent migration after `app.init_db` or before restarting the upgraded service:
+For existing Phase 10 databases, the backend runs the Phase 11 and Phase 12 idempotent migrations during startup. They can also be run manually after `app.init_db`:
 
 ```bash
 python -m app.migrations.phase11_task_run_lifecycle
