@@ -437,6 +437,7 @@ async def execute_chat_run(
                         cancel_event=cancel_event,
                         assume_done_after_text_silence=settings.task_assume_done_after_text_silence,
                         final_silence_seconds=settings.task_gateway_final_silence_seconds,
+                        first_token_timeout_seconds=settings.task_gateway_first_token_timeout_seconds,
                         recv_tick_seconds=settings.task_gateway_recv_tick_seconds,
                         client_message_id=run.client_message_id,
                         gateway_session_key=run.gateway_session_key,

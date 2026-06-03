@@ -225,6 +225,7 @@ class OpenClawGatewayClient:
         cancel_event: asyncio.Event | None = None,
         assume_done_after_text_silence: bool = False,
         final_silence_seconds: int | None = None,
+        first_token_timeout_seconds: int | None = None,
         recv_tick_seconds: int | None = None,
         client_message_id: str | None = None,
         gateway_session_key: str | None = None,
@@ -260,6 +261,11 @@ class OpenClawGatewayClient:
             or build_gateway_session_identity(user, agent, conversation, run_id, client_message_id).client_message_id
         )
         recv_tick = max(1, recv_tick_seconds or get_settings().task_gateway_recv_tick_seconds)
+        first_token_timeout = (
+            max(1, first_token_timeout_seconds)
+            if first_token_timeout_seconds is not None and first_token_timeout_seconds > 0
+            else None
+        )
 
         try:
             async with self._get_gateway_semaphore():
@@ -291,6 +297,17 @@ class OpenClawGatewayClient:
                         ):
                             yield self._silent_success_event(collector, sanitized_request)
                             return
+
+                        if (
+                            first_token_timeout is not None
+                            and not has_text_output
+                            and time.monotonic() - started_at >= first_token_timeout
+                        ):
+                            raise OpenClawGatewayConnectionError(
+                                "OpenClaw Gateway first assistant output timed out",
+                                gateway_request=sanitized_request,
+                                gateway_debug_events=collector.snapshot(),
+                            )
 
                         try:
                             raw_message = await self._recv_with_cancel(
