@@ -21,6 +21,7 @@ class TaskRunRead(BaseModel):
     output_text: str | None
     output_dir: str | None
     output_files_json: Any | None = None
+    raw_payload: Any | None = None
     raw_payload_summary: Any | None = None
     error_message: str | None
     queued_at: datetime | None

@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.agent import Agent
 from app.models.message import Message
+from app.models.conversation import Conversation
+from app.models.message import MessageRole
 from app.models.task_run import ACTIVE_RUN_STATUSES, TERMINAL_RUN_STATUSES, TaskRun, TaskRunStatus
 from app.models.user import User, UserRole
 from app.schemas.run import TaskRunRead
@@ -53,6 +55,7 @@ def _to_read(db: Session, run: TaskRun, agent: Agent | None = None) -> TaskRunRe
         output_text=run.output_text,
         output_dir=run.output_dir,
         output_files_json=run.output_files_json,
+        raw_payload=run.raw_payload,
         raw_payload_summary=_raw_payload_summary(db, run.id),
         error_message=run.error_message,
         queued_at=run.queued_at,
@@ -137,6 +140,88 @@ def touch_task_run_heartbeat(db: Session, run: TaskRun) -> TaskRun:
     return run
 
 
+def _merge_raw_payload(existing: dict | None, patch: dict | None) -> dict | None:
+    if not patch:
+        return existing
+    merged = dict(existing or {})
+    merged.update(patch)
+    return merged
+
+
+def update_task_run_output(
+    db: Session,
+    run: TaskRun,
+    *,
+    output_text: str,
+    raw_payload_patch: dict | None = None,
+    allow_terminal_update: bool = False,
+) -> TaskRun:
+    if _is_terminal(run) and not allow_terminal_update:
+        return run
+    run.output_text = output_text
+    run.heartbeat_at = _utc_now()
+    run.raw_payload = _merge_raw_payload(run.raw_payload, raw_payload_patch)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def patch_task_run_raw_payload(
+    db: Session,
+    run: TaskRun,
+    raw_payload_patch: dict | None,
+    *,
+    allow_terminal_update: bool = False,
+) -> TaskRun:
+    if not raw_payload_patch:
+        return run
+    if _is_terminal(run) and not allow_terminal_update:
+        return run
+    run.raw_payload = _merge_raw_payload(run.raw_payload, raw_payload_patch)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def upsert_assistant_message_for_run(
+    db: Session,
+    *,
+    run: TaskRun,
+    conversation: Conversation,
+    content: str,
+    raw_payload_patch: dict | None = None,
+) -> Message:
+    message = db.scalars(
+        select(Message)
+        .where(Message.run_id == run.id)
+        .where(Message.role == MessageRole.assistant)
+        .order_by(Message.id.asc())
+    ).first()
+    if message is None:
+        message = Message(
+            conversation_id=conversation.id,
+            run_id=run.id,
+            role=MessageRole.assistant,
+            content=content,
+            raw_payload=raw_payload_patch or {},
+        )
+        db.add(message)
+        db.flush()
+    else:
+        message.content = content
+        message.raw_payload = _merge_raw_payload(message.raw_payload, raw_payload_patch) or {}
+
+    conversation.updated_at = _utc_now()
+    run.raw_payload = _merge_raw_payload(
+        run.raw_payload,
+        {"assistant_message_id": message.id},
+    )
+    db.commit()
+    db.refresh(message)
+    db.refresh(run)
+    return message
+
+
 def mark_task_run_success(
     db: Session,
     run: TaskRun,
@@ -147,7 +232,8 @@ def mark_task_run_success(
     if _is_terminal(run):
         return run
     run.status = TaskRunStatus.success
-    run.output_text = output_text
+    if output_text or run.output_text is None:
+        run.output_text = output_text
     if output_dir:
         run.output_dir = output_dir
     run.error_message = None
@@ -213,7 +299,7 @@ def mark_task_run_timeout(
 
 
 def mark_task_run_stale(db: Session, run: TaskRun, message: str) -> TaskRun:
-    return mark_task_run_failed(db, run, message, status_value=TaskRunStatus.stale)
+    return mark_task_run_failed(db, run, message, output_text=run.output_text, status_value=TaskRunStatus.stale)
 
 
 def request_task_run_cancel(db: Session, current_user: User, run_id: int) -> TaskRun:

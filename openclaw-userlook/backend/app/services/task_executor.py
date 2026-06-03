@@ -9,10 +9,8 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.models.agent import Agent
 from app.models.conversation import Conversation
-from app.models.message import MessageRole
 from app.models.task_run import TERMINAL_RUN_STATUSES, TaskRun, TaskRunStatus
 from app.models.user import User
-from app.services.conversation_service import save_message
 from app.services.file_service import register_output_files
 from app.services.openclaw_adapter import OpenClawAdapter, OpenClawAdapterEvent
 from app.services.run_service import (
@@ -21,13 +19,18 @@ from app.services.run_service import (
     mark_task_run_running,
     mark_task_run_success,
     mark_task_run_timeout,
+    patch_task_run_raw_payload,
     touch_task_run_heartbeat,
+    update_task_run_output,
+    upsert_assistant_message_for_run,
 )
 from app.services.task_queue import QueueStatus, task_queue
 from app.services.ws_connection_manager import connection_manager
 
 
 HEARTBEAT_INTERVAL_SECONDS = 5
+OUTPUT_PERSIST_INTERVAL_SECONDS = 1
+OUTPUT_PERSIST_CHARS = 200
 TERMINAL_GATEWAY_STATUSES = {"success", "failed", "cancelled", "timeout"}
 ERROR_GATEWAY_STATUSES = {"failed", "cancelled", "timeout"}
 
@@ -56,7 +59,12 @@ async def _broadcast_run_status(
     message: str | None = None,
     output_files: list | None = None,
 ) -> None:
-    payload = {"type": "run_status", "run_id": run_id, "status": status_value}
+    payload = {
+        "type": "run_status",
+        "conversation_id": conversation_id,
+        "run_id": run_id,
+        "status": status_value,
+    }
     if message:
         payload["message"] = message
     if output_files is not None:
@@ -75,6 +83,7 @@ async def _broadcast_assistant_done(
         conversation_id,
         {
             "type": "assistant_done",
+            "conversation_id": conversation_id,
             "message_id": message_id,
             "run_id": run_id,
             "output_files": output_files,
@@ -124,14 +133,20 @@ async def _finish_success(
     output_dir: str | None = None,
     raw_payload: dict | None = None,
 ) -> TaskRun:
-    assistant_message = save_message(
+    final_payload = {
+        "streaming": False,
+        "status": "success",
+        **(raw_payload or {}),
+    }
+    assistant_message = upsert_assistant_message_for_run(
         db,
-        conversation,
-        MessageRole.assistant,
-        assistant_content,
-        raw_payload=raw_payload,
-        run_id=run.id,
+        run=run,
+        conversation=conversation,
+        content=assistant_content,
+        raw_payload_patch=final_payload,
     )
+    run = db.get(TaskRun, run.id) or run
+    run = patch_task_run_raw_payload(db, run, final_payload)
     run = mark_task_run_success(
         db,
         run,
@@ -186,17 +201,17 @@ async def _handle_terminal_error_event(
         )
     output_files_payload = []
     if assistant_content:
-        assistant_message = save_message(
+        assistant_message = upsert_assistant_message_for_run(
             db,
-            conversation,
-            MessageRole.assistant,
-            assistant_content,
-            raw_payload={
+            run=run,
+            conversation=conversation,
+            content=assistant_content,
+            raw_payload_patch={
                 "partial": True,
-                "error": terminal_status,
+                "streaming": False,
+                "status": terminal_status,
                 "gateway_event": event.raw,
             },
-            run_id=run.id,
         )
         output_files = register_output_files(db, user.id, run.output_dir)
         output_files_payload = jsonable_encoder(output_files)
@@ -233,12 +248,16 @@ async def execute_chat_run(
     gateway_files: list[dict[str, object]],
     cancel_event: asyncio.Event,
 ) -> None:
+    output_chunks: list[str] = []
     assistant_content = ""
     last_gateway_event = None
     terminal_event_received = False
     gateway_terminal_status: str | None = None
     first_token_at: datetime | None = None
     last_delta_at: datetime | None = None
+    last_persist_at: datetime | None = None
+    persisted_text_length = 0
+    assistant_message_id: int | None = None
     settings = get_settings()
     adapter = OpenClawAdapter(settings=settings)
     task_queue.set_abort(run_id, cancel_event.set)
@@ -282,6 +301,84 @@ async def execute_chat_run(
 
             timeout_seconds = run.timeout_seconds or settings.task_short_chat_timeout_seconds
             last_heartbeat = _utc_now()
+
+            def build_streaming_payload(
+                *,
+                streaming: bool,
+                status_value: str | None = None,
+                extra: dict | None = None,
+            ) -> dict:
+                payload = {
+                    "streaming": streaming,
+                    "first_token_at": first_token_at.isoformat() if first_token_at else None,
+                    "last_delta_at": last_delta_at.isoformat() if last_delta_at else None,
+                    "chunk_count": len(output_chunks),
+                }
+                if status_value:
+                    payload["status"] = status_value
+                if extra:
+                    payload.update(extra)
+                return payload
+
+            def persist_output(*, force: bool = False, status_value: str | None = None, extra: dict | None = None) -> None:
+                nonlocal run, last_persist_at, persisted_text_length, assistant_message_id
+                if not assistant_content:
+                    return
+                now = _utc_now()
+                should_persist = (
+                    force
+                    or last_persist_at is None
+                    or (now - last_persist_at).total_seconds() >= OUTPUT_PERSIST_INTERVAL_SECONDS
+                    or len(assistant_content) - persisted_text_length >= OUTPUT_PERSIST_CHARS
+                )
+                if not should_persist:
+                    return
+                payload = build_streaming_payload(
+                    streaming=status_value is None,
+                    status_value=status_value,
+                    extra=extra,
+                )
+                run = db.get(TaskRun, run.id) or run
+                run = update_task_run_output(
+                    db,
+                    run,
+                    output_text=assistant_content,
+                    raw_payload_patch=payload,
+                    allow_terminal_update=force,
+                )
+                assistant_message = upsert_assistant_message_for_run(
+                    db,
+                    run=run,
+                    conversation=conversation,
+                    content=assistant_content,
+                    raw_payload_patch={
+                        **payload,
+                        "run_id": run.id,
+                    },
+                )
+                assistant_message_id = assistant_message.id
+                last_persist_at = now
+                persisted_text_length = len(assistant_content)
+
+            async def append_delta(part: str, now: datetime) -> None:
+                nonlocal assistant_content, first_token_at, last_delta_at
+                if first_token_at is None:
+                    first_token_at = now
+                last_delta_at = now
+                output_chunks.append(part)
+                assistant_content += part
+                persist_output()
+                await connection_manager.broadcast_json(
+                    conversation_id,
+                    {
+                        "type": "assistant_delta",
+                        "conversation_id": conversation_id,
+                        "run_id": run.id,
+                        "message_id": assistant_message_id,
+                        "content": part,
+                    },
+                )
+
             try:
                 async with asyncio.timeout(timeout_seconds):
                     async for event in adapter.stream_chat(
@@ -321,14 +418,7 @@ async def execute_chat_run(
                         if event.type == "delta":
                             part = _extract_incremental_text(assistant_content, event.content)
                             if part:
-                                if first_token_at is None:
-                                    first_token_at = now
-                                last_delta_at = now
-                                assistant_content += part
-                                await connection_manager.broadcast_json(
-                                    conversation_id,
-                                    {"type": "assistant_delta", "content": part},
-                                )
+                                await append_delta(part, now)
                             continue
 
                         if event.status in TERMINAL_GATEWAY_STATUSES:
@@ -358,16 +448,14 @@ async def execute_chat_run(
 
                         final_delta = _extract_incremental_text(assistant_content, event.content)
                         if final_delta:
-                            if first_token_at is None:
-                                first_token_at = now
-                            last_delta_at = now
-                            assistant_content += final_delta
-                            await connection_manager.broadcast_json(
-                                conversation_id,
-                                {"type": "assistant_delta", "content": final_delta},
-                            )
+                            await append_delta(final_delta, now)
 
                         if event.type == "done" or event.status == "success":
+                            persist_output(
+                                force=True,
+                                status_value="success",
+                                extra={"gateway_event": event.raw},
+                            )
                             await _finish_success(
                                 db=db,
                                 run=run,
@@ -391,11 +479,22 @@ async def execute_chat_run(
                 can_assume_done = (
                     settings.task_assume_done_after_text_silence
                     and assistant_content
+                    and bool(output_chunks)
+                    and run.run_type == "chat"
                     and gateway_terminal_status not in ERROR_GATEWAY_STATUSES
                     and silence_seconds is not None
                     and silence_seconds >= settings.task_gateway_final_silence_seconds
                 )
                 if can_assume_done:
+                    persist_output(
+                        force=True,
+                        status_value="success",
+                        extra={
+                            "assumed_done_after_text_silence": True,
+                            "final_silence_seconds": silence_seconds,
+                            "gateway_event": last_gateway_event,
+                        },
+                    )
                     await _finish_success(
                         db=db,
                         run=run,
@@ -424,19 +523,29 @@ async def execute_chat_run(
                 )
                 output_files_payload = []
                 if assistant_content:
-                    assistant_message = save_message(
-                        db,
-                        conversation,
-                        MessageRole.assistant,
-                        assistant_content,
-                        raw_payload={
+                    persist_output(
+                        force=True,
+                        status_value="timeout",
+                        extra={
                             "partial": True,
+                            "timeout": True,
+                            "gateway_event": last_gateway_event,
+                        },
+                    )
+                    assistant_message = upsert_assistant_message_for_run(
+                        db,
+                        run=run,
+                        conversation=conversation,
+                        content=assistant_content,
+                        raw_payload_patch={
+                            "partial": True,
+                            "streaming": False,
+                            "status": "timeout",
                             "timeout": True,
                             "gateway_event": last_gateway_event,
                             "first_token_at": first_token_at.isoformat() if first_token_at else None,
                             "last_delta_at": last_delta_at.isoformat() if last_delta_at else None,
                         },
-                        run_id=run.id,
                     )
                     output_files = register_output_files(db, user.id, run.output_dir)
                     output_files_payload = jsonable_encoder(output_files)
@@ -459,6 +568,19 @@ async def execute_chat_run(
 
             if assistant_content:
                 silence_seconds = _final_silence_seconds(last_delta_at)
+                persist_output(
+                    force=True,
+                    status_value="success",
+                    extra={
+                        "gateway_event": last_gateway_event,
+                        "assumed_done_after_text_silence": bool(
+                            settings.task_assume_done_after_text_silence
+                            and silence_seconds is not None
+                            and silence_seconds >= settings.task_gateway_final_silence_seconds
+                        ),
+                        "final_silence_seconds": silence_seconds,
+                    },
+                )
                 await _finish_success(
                     db=db,
                     run=run,
@@ -507,19 +629,20 @@ async def execute_chat_run(
                     output_text=assistant_content or None,
                 )
                 if assistant_content and conversation is not None:
-                    assistant_message = save_message(
+                    assistant_message = upsert_assistant_message_for_run(
                         db,
-                        conversation,
-                        MessageRole.assistant,
-                        assistant_content,
-                        raw_payload={
+                        run=run,
+                        conversation=conversation,
+                        content=assistant_content,
+                        raw_payload_patch={
                             "partial": True,
+                            "streaming": False,
+                            "status": "cancelled",
                             "cancelled": True,
                             "gateway_event": last_gateway_event,
                             "first_token_at": first_token_at.isoformat() if first_token_at else None,
                             "last_delta_at": last_delta_at.isoformat() if last_delta_at else None,
                         },
-                        run_id=run.id,
                     )
                     await _broadcast_assistant_done(
                         conversation_id,
@@ -537,6 +660,7 @@ async def execute_chat_run(
     except Exception as exc:
         with SessionLocal() as db:
             run = db.get(TaskRun, run_id)
+            conversation = db.get(Conversation, conversation_id)
             if run is not None and run.status not in TERMINAL_RUN_STATUSES:
                 run = mark_task_run_failed(
                     db,
@@ -544,9 +668,29 @@ async def execute_chat_run(
                     str(exc) or "OpenClaw call failed",
                     output_text=assistant_content or None,
                 )
+                if assistant_content and conversation is not None:
+                    upsert_assistant_message_for_run(
+                        db,
+                        run=run,
+                        conversation=conversation,
+                        content=assistant_content,
+                        raw_payload_patch={
+                            "partial": True,
+                            "streaming": False,
+                            "status": "failed",
+                            "gateway_event": last_gateway_event,
+                            "first_token_at": first_token_at.isoformat() if first_token_at else None,
+                            "last_delta_at": last_delta_at.isoformat() if last_delta_at else None,
+                        },
+                    )
                 await connection_manager.broadcast_json(
                     conversation_id,
-                    {"type": "error", "message": str(exc) or "OpenClaw 调用失败"},
+                    {
+                        "type": "error",
+                        "conversation_id": conversation_id,
+                        "run_id": run.id,
+                        "message": str(exc) or "OpenClaw 调用失败",
+                    },
                 )
                 await _broadcast_run_status(
                     conversation_id,

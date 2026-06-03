@@ -41,6 +41,7 @@ def scan_stale_task_runs() -> int:
             )
         )
         for run in runs:
+            run = db.get(TaskRun, run.id) or run
             if run.status in TERMINAL_RUN_STATUSES:
                 continue
             if run.status == TaskRunStatus.running:
@@ -50,16 +51,25 @@ def scan_stale_task_runs() -> int:
                     and started_at is not None
                     and started_at + timedelta(seconds=run.timeout_seconds) <= now
                 ):
+                    latest = db.get(TaskRun, run.id) or run
+                    if latest.status in TERMINAL_RUN_STATUSES:
+                        continue
                     task_queue.cancel_task(run.id)
-                    mark_task_run_timeout(db, run, "任务执行超过超时时间")
+                    mark_task_run_timeout(db, latest, "任务执行超过超时时间", output_text=latest.output_text)
                     logger.warning("running_hard_timeout run_id=%s", run.id)
                     changed += 1
                     continue
 
                 heartbeat_at = _as_aware(run.heartbeat_at) or _as_aware(run.updated_at)
                 if heartbeat_at is not None and heartbeat_at <= stale_before:
+                    latest = db.get(TaskRun, run.id) or run
+                    if latest.status in TERMINAL_RUN_STATUSES:
+                        continue
+                    latest_heartbeat_at = _as_aware(latest.heartbeat_at) or _as_aware(latest.updated_at)
+                    if latest_heartbeat_at is not None and latest_heartbeat_at > stale_before:
+                        continue
                     task_queue.cancel_task(run.id)
-                    mark_task_run_stale(db, run, "任务心跳过期，已标记为 stale")
+                    mark_task_run_stale(db, latest, "任务心跳过期，已标记为 stale")
                     logger.warning("stale_heartbeat run_id=%s", run.id)
                     changed += 1
                     continue
@@ -71,8 +81,11 @@ def scan_stale_task_runs() -> int:
                     and queued_at is not None
                     and queued_at + timedelta(seconds=settings.task_queue_timeout_seconds) <= now
                 ):
+                    latest = db.get(TaskRun, run.id) or run
+                    if latest.status in TERMINAL_RUN_STATUSES:
+                        continue
                     task_queue.cancel_task(run.id)
-                    mark_task_run_timeout(db, run, "任务排队超过超时时间")
+                    mark_task_run_timeout(db, latest, "任务排队超过超时时间", output_text=latest.output_text)
                     logger.warning("queued_timeout run_id=%s", run.id)
                     changed += 1
 
