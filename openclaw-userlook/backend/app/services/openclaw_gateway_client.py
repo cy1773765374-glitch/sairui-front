@@ -150,7 +150,8 @@ class OpenClawGatewayClient:
         request_id = str(request_payload.get("id") or "")
         params = request_payload.get("params") if isinstance(request_payload.get("params"), dict) else {}
         session_key = str(params.get("sessionKey") or "")
-        effective_client_message_id = str(params.get("clientMessageId") or "")
+        identity = build_gateway_session_identity(user, agent, conversation, run_id, client_message_id)
+        effective_client_message_id = identity.client_message_id
         recv_tick = max(1, recv_tick_seconds or get_settings().task_gateway_recv_tick_seconds)
         debug_events: list[dict[str, Any]] = []
 
@@ -534,6 +535,7 @@ class OpenClawGatewayClient:
         )
         params: dict[str, Any] = {
             "sessionKey": session_key,
+            "agentId": identity.openclaw_agent_id,
             "message": message,
             "deliver": False,
             "timeoutMs": self.timeout_seconds * 1000,
