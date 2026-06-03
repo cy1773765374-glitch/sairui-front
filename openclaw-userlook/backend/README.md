@@ -211,7 +211,8 @@ OpenClaw Gateway 连接失败，请检查 openclaw-gateway.service 是否运行
 ## Verification
 
 ```bash
-.\.venv\Scripts\python.exe -m compileall app
+.\.venv\Scripts\python.exe -m compileall app tests
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
 .\.venv\Scripts\python.exe -c "import app.main; print('ok')"
 .\.venv\Scripts\python.exe -c "from app.core.security import hash_password, verify_password; h=hash_password('Admin@123456'); print(verify_password('Admin@123456', h))"
 ```
