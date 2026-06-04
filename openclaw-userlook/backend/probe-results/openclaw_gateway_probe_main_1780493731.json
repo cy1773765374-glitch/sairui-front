@@ -1,0 +1,7 @@
+{
+  "agent": "main",
+  "message": "who are you",
+  "timeout": 90,
+  "success": false,
+  "error": "timed out during opening handshake"
+}

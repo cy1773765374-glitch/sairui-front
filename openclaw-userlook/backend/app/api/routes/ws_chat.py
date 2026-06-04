@@ -1,7 +1,6 @@
 import json
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, status
-from fastapi.encoders import jsonable_encoder
 from jose import JWTError
 from pydantic import ValidationError
 
@@ -19,7 +18,6 @@ from app.services.file_service import list_gateway_upload_files, validate_user_u
 from app.services.run_service import (
     create_task_run,
     get_task_run_detail,
-    get_latest_active_run_for_conversation,
     request_task_run_cancel,
 )
 from app.services.task_executor import start_chat_run
@@ -143,17 +141,6 @@ async def chat_websocket(
                     await send_json({"type": "error", "message": "invalid message format"})
                     continue
 
-                active_run = get_latest_active_run_for_conversation(db, current_user, conversation.id)
-                if active_run is not None or task_queue.has_active_task(conversation.id):
-                    await send_json(
-                        {
-                            "type": "active_run",
-                            "message": "当前会话已有任务正在运行",
-                            "active_run": jsonable_encoder(active_run) if active_run else None,
-                        }
-                    )
-                    continue
-
                 try:
                     validate_user_upload_file_ids(db, current_user, inbound_message.file_ids)
                     gateway_files = list_gateway_upload_files(
@@ -219,7 +206,7 @@ async def chat_websocket(
             try:
                 await connection_manager.send_json(
                     websocket,
-                    {"type": "error", "message": str(exc) or "WebSocket 内部错误"},
+                    {"type": "error", "message": str(exc) or "WebSocket internal error"},
                 )
             finally:
                 await websocket.close(code=status.WS_1011_INTERNAL_ERROR)

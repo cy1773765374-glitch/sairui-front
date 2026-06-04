@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import json
 import time
@@ -97,8 +98,15 @@ class OpenClawGatewayClient:
         self.password = password
         self.timeout_seconds = timeout_seconds
         self.device_identity_path = device_identity_path
+        self._ws: Any | None = None
+        self._connected = False
+        self._heartbeat_task: asyncio.Task[None] | None = None
 
-    async def stream_chat(
+    @property
+    def is_connected(self) -> bool:
+        return self._connected and self._ws is not None
+
+    async def _stream_chat_single_use(
         self,
         *,
         user: User,
@@ -193,6 +201,200 @@ class OpenClawGatewayClient:
             raise
         except (OSError, WebSocketException, TimeoutError, asyncio.TimeoutError) as exc:
             raise OpenClawGatewayConnectionError(GATEWAY_UNAVAILABLE_MESSAGE) from exc
+
+    async def stream_chat(
+        self,
+        *,
+        user: User,
+        agent: Agent,
+        conversation: Conversation,
+        content: str,
+        file_ids: list[int],
+        files: list[dict[str, Any]] | None = None,
+        run_id: int | None = None,
+        output_dir: str | None = None,
+        cancel_event: asyncio.Event | None = None,
+        assume_done_after_text_silence: bool = False,
+        final_silence_seconds: int | None = None,
+    ) -> AsyncIterator[OpenClawGatewayEvent]:
+        should_disconnect = not self.is_connected
+        try:
+            if should_disconnect:
+                await self.connect()
+            request_id = await self.send_chat_request(
+                user=user,
+                agent=agent,
+                conversation=conversation,
+                content=content,
+                file_ids=file_ids,
+                files=files or [],
+                run_id=run_id,
+                output_dir=output_dir,
+            )
+            async for event in self.receive_stream(
+                request_id=request_id,
+                cancel_event=cancel_event,
+                assume_done_after_text_silence=assume_done_after_text_silence,
+                final_silence_seconds=final_silence_seconds,
+            ):
+                yield event
+        except OpenClawGatewayConnectionError:
+            raise
+        except (OSError, WebSocketException, TimeoutError, asyncio.TimeoutError) as exc:
+            self._connected = False
+            raise OpenClawGatewayConnectionError(GATEWAY_UNAVAILABLE_MESSAGE) from exc
+        finally:
+            if should_disconnect:
+                await self.disconnect()
+
+    async def connect(self) -> None:
+        if self.is_connected:
+            return
+        headers = self._build_headers()
+        try:
+            self._ws = await websockets.connect(
+                self.ws_url,
+                additional_headers=headers,
+                open_timeout=5,
+                close_timeout=5,
+                ping_interval=None,
+                ping_timeout=None,
+            )
+            await self._connect_gateway(self._ws)
+            self._connected = True
+            self._start_heartbeat()
+        except OpenClawGatewayConnectionError:
+            await self.disconnect()
+            raise
+        except (OSError, WebSocketException, TimeoutError, asyncio.TimeoutError) as exc:
+            await self.disconnect()
+            raise OpenClawGatewayConnectionError(GATEWAY_UNAVAILABLE_MESSAGE) from exc
+
+    async def disconnect(self) -> None:
+        self._connected = False
+        if self._heartbeat_task is not None:
+            self._heartbeat_task.cancel()
+            with contextlib.suppress(BaseException):
+                await self._heartbeat_task
+            self._heartbeat_task = None
+        if self._ws is not None:
+            with contextlib.suppress(Exception):
+                await self._ws.close()
+            self._ws = None
+
+    async def send_chat_request(
+        self,
+        *,
+        user: User,
+        agent: Agent,
+        conversation: Conversation,
+        content: str,
+        file_ids: list[int],
+        files: list[dict[str, Any]] | None = None,
+        run_id: int | None = None,
+        output_dir: str | None = None,
+    ) -> str:
+        if not self.is_connected or self._ws is None:
+            raise OpenClawGatewayConnectionError(GATEWAY_UNAVAILABLE_MESSAGE)
+        request_payload = self._build_chat_request(
+            user=user,
+            agent=agent,
+            conversation=conversation,
+            content=content,
+            file_ids=file_ids,
+            files=files or [],
+            run_id=run_id,
+            output_dir=output_dir,
+        )
+        await self._ws.send(json.dumps(request_payload, ensure_ascii=False))
+        return str(request_payload.get("id"))
+
+    async def receive_stream(
+        self,
+        *,
+        request_id: str,
+        cancel_event: asyncio.Event | None = None,
+        assume_done_after_text_silence: bool = False,
+        final_silence_seconds: int | None = None,
+    ) -> AsyncIterator[OpenClawGatewayEvent]:
+        if not self.is_connected or self._ws is None:
+            raise OpenClawGatewayConnectionError(GATEWAY_UNAVAILABLE_MESSAGE)
+
+        has_text_output = False
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                await self.disconnect()
+                raise asyncio.CancelledError
+            try:
+                recv_timeout = self.timeout_seconds
+                if assume_done_after_text_silence and has_text_output and final_silence_seconds is not None:
+                    recv_timeout = max(1, final_silence_seconds)
+                if cancel_event is None:
+                    raw_message = await asyncio.wait_for(self._ws.recv(), timeout=recv_timeout)
+                else:
+                    recv_task = asyncio.create_task(self._ws.recv())
+                    cancel_task = asyncio.create_task(cancel_event.wait())
+                    done, pending = await asyncio.wait(
+                        {recv_task, cancel_task},
+                        timeout=recv_timeout,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for pending_task in pending:
+                        pending_task.cancel()
+                    if not done:
+                        recv_task.cancel()
+                        cancel_task.cancel()
+                        raise TimeoutError
+                    if cancel_task in done:
+                        recv_task.cancel()
+                        await self.disconnect()
+                        raise asyncio.CancelledError
+                    raw_message = recv_task.result()
+            except ConnectionClosedOK as exc:
+                self._connected = False
+                if has_text_output:
+                    return
+                raise OpenClawGatewayConnectionError("OpenClaw stream ended without output") from exc
+            except TimeoutError as exc:
+                if assume_done_after_text_silence and has_text_output:
+                    return
+                raise OpenClawGatewayConnectionError("OpenClaw Gateway response timeout") from exc
+            except (OSError, WebSocketException, asyncio.TimeoutError) as exc:
+                self._connected = False
+                raise OpenClawGatewayConnectionError(GATEWAY_UNAVAILABLE_MESSAGE) from exc
+
+            payload = self._decode_json_frame(raw_message)
+            if isinstance(payload, dict) and not self._message_matches_request(payload, request_id):
+                continue
+
+            event = self._parse_gateway_message(payload)
+            if event.content:
+                has_text_output = True
+            yield event
+            if event.type in {"done", "error"}:
+                break
+
+    def _start_heartbeat(self) -> None:
+        if self._heartbeat_task is None or self._heartbeat_task.done():
+            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+    async def _heartbeat_loop(self) -> None:
+        while self.is_connected and self._ws is not None:
+            await asyncio.sleep(20)
+            if not self.is_connected or self._ws is None:
+                return
+            try:
+                pong_waiter = await self._ws.ping()
+                await asyncio.wait_for(pong_waiter, timeout=20)
+            except (OSError, WebSocketException, TimeoutError, asyncio.TimeoutError):
+                self._connected = False
+                return
+
+    def _message_matches_request(self, payload: dict[str, Any], request_id: str) -> bool:
+        message_id = payload.get("id") or payload.get("request_id") or payload.get("requestId")
+        if message_id is None:
+            return True
+        return str(message_id) == request_id
 
     def _build_headers(self) -> dict[str, str]:
         if not self.token:
@@ -521,13 +723,15 @@ class OpenClawGatewayClient:
             )
         return attachments
 
-    def _parse_gateway_message(self, raw_message: str | bytes) -> OpenClawGatewayEvent:
-        if isinstance(raw_message, bytes):
+    def _parse_gateway_message(self, raw_message: Any) -> OpenClawGatewayEvent:
+        if isinstance(raw_message, dict):
+            payload = raw_message
+        elif isinstance(raw_message, bytes):
             raw_text = raw_message.decode("utf-8", errors="replace")
+            payload = self._decode_json_frame(raw_text)
         else:
             raw_text = raw_message
-
-        payload = self._decode_json_frame(raw_text)
+            payload = self._decode_json_frame(raw_text)
         if isinstance(payload, str):
             return OpenClawGatewayEvent(type="delta", content=payload)
 

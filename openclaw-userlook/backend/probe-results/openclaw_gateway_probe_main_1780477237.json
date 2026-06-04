@@ -1,0 +1,7 @@
+{
+  "agent": "main",
+  "message": "你是谁",
+  "timeout": 30,
+  "success": false,
+  "error": "[WinError 1225] 远程计算机拒绝网络连接。"
+}

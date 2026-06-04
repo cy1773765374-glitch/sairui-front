@@ -31,8 +31,17 @@ class Settings(BaseSettings):
     task_stale_running_minutes: int = Field(default=30, alias="TASK_STALE_RUNNING_MINUTES")
     task_watchdog_interval_seconds: int = Field(default=30, alias="TASK_WATCHDOG_INTERVAL_SECONDS")
     task_agent_concurrency: int = Field(default=1, alias="TASK_AGENT_CONCURRENCY")
-    task_global_chat_concurrency: int = Field(default=3, alias="TASK_GLOBAL_CHAT_CONCURRENCY")
+    task_global_chat_concurrency: int = Field(default=50, alias="TASK_GLOBAL_CHAT_CONCURRENCY")
+    task_agent_max_concurrency: int = Field(default=10, alias="TASK_AGENT_MAX_CONCURRENCY")
+    task_user_max_concurrency: int = Field(default=5, alias="TASK_USER_MAX_CONCURRENCY")
+    task_conversation_max_concurrency: int = Field(default=5, alias="TASK_CONVERSATION_MAX_CONCURRENCY")
     task_global_job_concurrency: int = Field(default=1, alias="TASK_GLOBAL_JOB_CONCURRENCY")
+    gateway_pool_enabled: bool = Field(default=True, alias="GATEWAY_POOL_ENABLED")
+    gateway_pool_min_idle: int = Field(default=2, alias="GATEWAY_POOL_MIN_IDLE")
+    gateway_pool_max_size: int = Field(default=10, alias="GATEWAY_POOL_MAX_SIZE")
+    gateway_pool_idle_timeout: int = Field(default=300, alias="GATEWAY_POOL_IDLE_TIMEOUT")
+    gateway_pool_max_lifetime: int = Field(default=3600, alias="GATEWAY_POOL_MAX_LIFETIME")
+    gateway_pool_acquire_timeout: int = Field(default=30, alias="GATEWAY_POOL_ACQUIRE_TIMEOUT")
     mock_openclaw: bool = Field(default=True, alias="MOCK_OPENCLAW")
     database_url: str = Field(
         default="mysql+pymysql://user:password@127.0.0.1:3306/openclaw_userlook?charset=utf8mb4",

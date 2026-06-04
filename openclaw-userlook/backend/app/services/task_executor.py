@@ -12,6 +12,7 @@ from app.models.conversation import Conversation
 from app.models.task_run import TERMINAL_RUN_STATUSES, TaskRun, TaskRunStatus
 from app.models.user import User
 from app.services.file_service import register_output_files
+from app.services.gateway_connection_pool import gateway_connection_pool
 from app.services.openclaw_adapter import OpenClawAdapter, OpenClawAdapterEvent
 from app.services.run_service import (
     mark_task_run_cancelled,
@@ -108,18 +109,26 @@ async def start_chat_run(
     gateway_files: list[dict[str, object]],
 ) -> QueueStatus:
     async def task_func(cancel_event: asyncio.Event) -> None:
-        await execute_chat_run(
-            run_id=run_id,
-            user_id=user_id,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            content=content,
-            file_ids=file_ids,
-            gateway_files=gateway_files,
-            cancel_event=cancel_event,
-        )
+        async with gateway_connection_pool.acquire_adapter() as adapter:
+            await execute_chat_run(
+                run_id=run_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                content=content,
+                file_ids=file_ids,
+                gateway_files=gateway_files,
+                cancel_event=cancel_event,
+                adapter=adapter,
+            )
 
-    return await task_queue.enqueue_conversation_task(conversation_id, run_id, task_func)
+    return await task_queue.enqueue_task(
+        conversation_id=conversation_id,
+        run_id=run_id,
+        user_id=user_id,
+        agent_id=agent_id,
+        task_func=task_func,
+    )
 
 
 async def _finish_success(
@@ -225,7 +234,12 @@ async def _handle_terminal_error_event(
         )
     await connection_manager.broadcast_json(
         conversation_id,
-        {"type": "error", "message": event.content or "OpenClaw 调用失败"},
+        {
+            "type": "error",
+            "conversation_id": conversation_id,
+            "run_id": run.id,
+            "message": event.content or "OpenClaw call failed",
+        },
     )
     await _broadcast_run_status(
         conversation_id,
@@ -247,6 +261,7 @@ async def execute_chat_run(
     file_ids: list[int],
     gateway_files: list[dict[str, object]],
     cancel_event: asyncio.Event,
+    adapter: OpenClawAdapter,
 ) -> None:
     output_chunks: list[str] = []
     assistant_content = ""
@@ -259,7 +274,6 @@ async def execute_chat_run(
     persisted_text_length = 0
     assistant_message_id: int | None = None
     settings = get_settings()
-    adapter = OpenClawAdapter(settings=settings)
     task_queue.set_abort(run_id, cancel_event.set)
 
     try:

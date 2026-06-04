@@ -16,6 +16,7 @@ from app.api.routes.ws_chat import router as ws_chat_router
 from app.core.config import get_settings
 from app.migrations.phase11_task_run_lifecycle import run_migration as run_phase11_migration
 from app.migrations.phase12_streaming_persistence import run_migration as run_phase12_migration
+from app.services.gateway_connection_pool import gateway_connection_pool
 from app.services.run_watchdog import watchdog_loop
 from app.services.task_queue import task_queue
 
@@ -26,12 +27,14 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     run_phase11_migration()
     run_phase12_migration()
+    await gateway_connection_pool.start()
     stop_event = asyncio.Event()
     watchdog_task = asyncio.create_task(watchdog_loop(stop_event))
     try:
         yield
     finally:
         stop_event.set()
+        await gateway_connection_pool.shutdown()
         await task_queue.shutdown()
         watchdog_task.cancel()
         try:
