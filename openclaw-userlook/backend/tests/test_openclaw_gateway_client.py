@@ -7,6 +7,7 @@ from app.models.agent import Agent, AgentRiskLevel
 from app.models.conversation import Conversation
 from app.models.user import User, UserRole, UserStatus
 from app.services.gateway_session import build_gateway_session_identity
+from app.services.gateway_connection_pool import GatewayConnectionPool
 from app.services.openclaw_gateway_client import OpenClawGatewayClient
 from app.services.openclaw_gateway_client import OpenClawGatewayConnectionError
 
@@ -366,6 +367,40 @@ class OpenClawGatewayClientStreamTest(unittest.IsolatedAsyncioTestCase):
         debug_events = raised.exception.gateway_debug_events
         self.assertTrue(any(item["classification"] == "parsed_run_status" for item in debug_events))
 
+    async def test_pool_discards_connection_after_silent_success(self) -> None:
+        client = OpenClawGatewayClient(ws_url="ws://127.0.0.1:18789", token="token", timeout_seconds=300)
+        fake_ws = FakeGatewayWebSocket(
+            [
+                {"type": "event", "event": "assistant_delta", "payload": {"delta": "hello"}},
+            ]
+        )
+        pool = GatewayConnectionPool(PoolSettings(max_size=1))
+        client.create_gateway_connection = AsyncMock(return_value=fake_ws)
+
+        events = [
+            event
+            async for event in client.stream_chat(
+                user=make_user(),
+                agent=make_agent(),
+                conversation=make_conversation(),
+                content="who are you",
+                file_ids=[],
+                files=[],
+                run_id=59,
+                output_dir=None,
+                client_message_id="client-1",
+                gateway_session_key="agent:mysql-analysis:web:7:mysql:11",
+                idempotency_key="openclaw-userlook:59:client-1",
+                assume_done_after_text_silence=True,
+                final_silence_seconds=0,
+                pool=pool,
+            )
+        ]
+
+        self.assertEqual([event.type for event in events], ["delta", "done"])
+        self.assertTrue(events[-1].assumed_done_after_text_silence)
+        self.assertTrue(fake_ws.closed)
+
 
 class FakeGatewayConnection:
     def __init__(self, websocket: "FakeGatewayWebSocket") -> None:
@@ -382,6 +417,8 @@ class FakeGatewayWebSocket:
     def __init__(self, frames: list[dict[str, object]]) -> None:
         self.sent_messages: list[str] = []
         self.frames = list(frames)
+        self.closed = False
+        self.close_code = None
 
     async def send(self, message: str) -> None:
         self.sent_messages.append(message)
@@ -393,7 +430,16 @@ class FakeGatewayWebSocket:
         return json.dumps(self.frames.pop(0))
 
     async def close(self) -> None:
+        self.closed = True
+        self.close_code = 1000
         return None
+
+
+class PoolSettings:
+    def __init__(self, *, max_size: int) -> None:
+        self.gateway_pool_max_size = max_size
+        self.gateway_pool_acquire_timeout = 0.05
+        self.gateway_pool_idle_timeout = 300
 
 
 if __name__ == "__main__":

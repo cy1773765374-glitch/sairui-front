@@ -3,6 +3,11 @@ import type { LocalMessage } from '../api/conversations'
 
 defineProps<{
   message: LocalMessage
+  canStopRun?: boolean
+}>()
+
+const emit = defineEmits<{
+  stopRun: [runId: number]
 }>()
 </script>
 
@@ -11,7 +16,18 @@ defineProps<{
     <div class="message-bubble">
       <div class="message-role">{{ message.role === 'user' ? '我' : 'Agent' }}</div>
       <div class="message-content">{{ message.content }}</div>
-      <div v-if="message.streaming" class="message-status">生成中</div>
+      <div v-if="message.streaming" class="message-status">
+        <span>生成中</span>
+        <el-button
+          v-if="canStopRun && message.run_id"
+          link
+          size="small"
+          type="warning"
+          @click="emit('stopRun', message.run_id)"
+        >
+          停止
+        </el-button>
+      </div>
     </div>
   </div>
 </template>
@@ -70,6 +86,9 @@ defineProps<{
 
 .message-status {
   margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: #6f7785;
   font-size: 12px;
 }
