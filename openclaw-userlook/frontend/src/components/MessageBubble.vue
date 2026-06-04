@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import type { LocalMessage } from '../api/conversations'
+import { computed } from 'vue'
 
-defineProps<{
+import type { LocalMessage } from '../api/conversations'
+import { formatDateTimeShanghai } from '../utils/time'
+
+const props = defineProps<{
   message: LocalMessage
   canStopRun?: boolean
 }>()
@@ -9,13 +12,58 @@ defineProps<{
 const emit = defineEmits<{
   stopRun: [runId: number]
 }>()
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function renderInlineMarkdown(value: string) {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+}
+
+function renderMarkdown(value: string) {
+  const normalized = value.replace(/\r\n/g, '\n')
+  const blocks: string[] = []
+  let cursor = 0
+  const fenceRe = /```([A-Za-z0-9_-]+)?\n([\s\S]*?)```/g
+  let match: RegExpExecArray | null
+
+  while ((match = fenceRe.exec(normalized))) {
+    const before = normalized.slice(cursor, match.index)
+    if (before) {
+      blocks.push(`<p>${renderInlineMarkdown(before).replace(/\n/g, '<br>')}</p>`)
+    }
+    const language = match[1] ? ` data-language="${escapeHtml(match[1])}"` : ''
+    blocks.push(`<pre><code${language}>${escapeHtml(match[2]).trimEnd()}</code></pre>`)
+    cursor = match.index + match[0].length
+  }
+
+  const rest = normalized.slice(cursor)
+  if (rest) {
+    blocks.push(`<p>${renderInlineMarkdown(rest).replace(/\n/g, '<br>')}</p>`)
+  }
+
+  return blocks.join('')
+}
+
+const renderedContent = computed(() => renderMarkdown(props.message.content))
 </script>
 
 <template>
   <div class="message-row" :class="`message-row--${message.role}`">
     <div class="message-bubble">
-      <div class="message-role">{{ message.role === 'user' ? '我' : 'Agent' }}</div>
-      <div class="message-content">{{ message.content }}</div>
+      <div class="message-meta">
+        <span>{{ message.role === 'user' ? '我' : 'Agent' }}</span>
+        <time>{{ formatDateTimeShanghai(message.created_at) }}</time>
+      </div>
+      <div class="message-content" v-html="renderedContent" />
       <div v-if="message.streaming" class="message-status">
         <span>生成中</span>
         <el-button
@@ -70,18 +118,58 @@ const emit = defineEmits<{
   background: #dfe9fb;
 }
 
-.message-role {
+.message-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 6px;
   color: #6f7785;
   font-size: 12px;
   font-weight: 700;
 }
 
+.message-meta time {
+  font-weight: 400;
+}
+
 .message-content {
-  white-space: pre-wrap;
+  line-height: 1.65;
   word-break: normal;
   overflow-wrap: break-word;
-  line-height: 1.65;
+}
+
+.message-content :deep(p) {
+  margin: 0;
+}
+
+.message-content :deep(p + p) {
+  margin-top: 10px;
+}
+
+.message-content :deep(code) {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgb(15 23 42 / 8%);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.message-content :deep(pre) {
+  margin: 10px 0 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #e5e7eb;
+  overflow-x: auto;
+}
+
+.message-content :deep(pre code) {
+  display: block;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  white-space: pre;
 }
 
 .message-status {

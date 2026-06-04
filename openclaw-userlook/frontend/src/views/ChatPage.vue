@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChatDotRound, Delete, Document, Files, InfoFilled, Picture, Plus } from '@element-plus/icons-vue'
+import { Delete, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 
-import { fetchAgent, fetchAgents, type Agent, type AgentRiskLevel } from '../api/agents'
+import { fetchAgent, fetchAgents, type Agent } from '../api/agents'
 import {
   buildConversationWebSocketUrl,
   createConversation,
@@ -14,9 +14,10 @@ import {
   type Conversation,
   type LocalMessage,
 } from '../api/conversations'
-import { downloadFile, formatFileSize, type UserFile } from '../api/files'
+import { type UserFile } from '../api/files'
 import { cancelRun, fetchRun, isActiveRunStatus, type TaskRun, type TaskRunStatus } from '../api/runs'
 import ChatWindow from '../components/ChatWindow.vue'
+import { formatDateTimeShanghai } from '../utils/time'
 
 type ServerWsMessage =
   | {
@@ -84,7 +85,6 @@ const router = useRouter()
 
 const loading = ref(true)
 const connected = ref(false)
-const detailDrawerVisible = ref(false)
 const agents = ref<Agent[]>([])
 const conversations = ref<Conversation[]>([])
 const agent = ref<Agent | null>(null)
@@ -108,12 +108,12 @@ let unmounted = false
 let suppressRouteWatch = false
 let activeInitializeRequestId = 0
 
-const title = computed(() => conversation.value?.title ?? agent.value?.name ?? 'Agent 对话')
+const title = computed(() => agent.value?.name ?? 'Agent 对话')
 const subtitle = computed(() => {
   if (!conversation.value) {
     return '正在准备会话'
   }
-  return `${conversation.value.agent_name} · ${conversation.value.session_key}`
+  return conversation.value.title
 })
 
 const conversationsByAgent = computed(() => {
@@ -213,16 +213,6 @@ function setMessagesForConversation(conversationId: number, nextMessages: LocalM
   if (conversation.value?.id === conversationId) {
     messages.value = messagesByConversation.value[conversationId]
   }
-}
-
-function riskTagType(riskLevel?: AgentRiskLevel) {
-  if (riskLevel === 'high') {
-    return 'danger'
-  }
-  if (riskLevel === 'medium') {
-    return 'warning'
-  }
-  return 'success'
 }
 
 function normalizeMessages(
@@ -849,18 +839,6 @@ async function initializeAgent(agentCode: string, preferredConversationId?: numb
   }
 }
 
-async function selectAgent(nextAgent: Agent) {
-  closeActiveSocket()
-  conversation.value = null
-  resetConversationRuntimeState()
-  messages.value = []
-  if (String(route.params.agentCode) === nextAgent.code) {
-    await initializeAgent(nextAgent.code)
-    return
-  }
-  router.push({ name: 'agent-chat', params: { agentCode: nextAgent.code }, query: {} })
-}
-
 function isConversationDeleteBlocked(nextConversation: Conversation) {
   return (
     nextConversation.id === conversation.value?.id &&
@@ -1123,32 +1101,11 @@ onBeforeUnmount(() => {
     <aside class="chat-panel left-panel">
       <el-card shadow="never">
         <template #header>
-          <div class="panel-header">
-            <span>可用 Agent</span>
-            <el-tag effect="plain">{{ agents.length }}</el-tag>
-          </div>
-        </template>
-        <div class="agent-list">
-          <div
-            v-for="item in agents"
-            :key="item.code"
-            class="agent-row"
-            :class="{ active: item.code === agent?.code }"
-          >
-            <button class="list-item agent-select" type="button" @click="selectAgent(item)">
-              <span>{{ item.name }}</span>
-              <el-tag size="small" :type="riskTagType(item.risk_level)" effect="plain">
-                {{ item.risk_level }}
-              </el-tag>
-            </button>
-          </div>
-        </div>
-      </el-card>
-
-      <el-card shadow="never">
-        <template #header>
-          <div class="panel-header">
-            <span>历史会话</span>
+          <div class="panel-header panel-header--stacked">
+            <div>
+              <strong>{{ agent?.name || 'Agent 对话' }}</strong>
+              <small>{{ connected ? '已连接' : '连接中' }}</small>
+            </div>
             <div class="panel-header-actions">
               <el-tag effect="plain">{{ conversationsByAgent.length }}</el-tag>
               <el-tooltip content="新建对话">
@@ -1174,7 +1131,7 @@ onBeforeUnmount(() => {
           >
             <button class="list-item conversation-item" type="button" @click="selectConversation(item)">
               <span>{{ item.title }}</span>
-              <small>{{ item.updated_at }}</small>
+              <small>{{ formatDateTimeShanghai(item.updated_at) }}</small>
             </button>
             <el-tooltip :content="getDeleteConversationTooltip(item)">
               <span class="conversation-delete-wrapper">
@@ -1198,9 +1155,6 @@ onBeforeUnmount(() => {
     </aside>
 
     <main class="chat-main">
-      <el-button class="mobile-detail-button" :icon="InfoFilled" @click="detailDrawerVisible = true">
-        Agent 详情
-      </el-button>
       <ChatWindow
         :title="title"
         :subtitle="subtitle"
@@ -1222,90 +1176,13 @@ onBeforeUnmount(() => {
         @remove-file="removeAttachedFile"
       />
     </main>
-
-    <aside class="chat-panel details-panel">
-      <el-card shadow="never">
-        <template #header>
-          <div class="panel-header">
-            <span>当前 Agent</span>
-            <el-tag v-if="agent" :type="riskTagType(agent.risk_level)" effect="plain">
-              {{ agent.risk_level }}
-            </el-tag>
-          </div>
-        </template>
-        <div v-if="agent" class="agent-detail">
-          <h2>{{ agent.name }}</h2>
-          <p>{{ agent.description || '暂无说明' }}</p>
-          <div class="capability-tags">
-            <el-tag plain><el-icon><ChatDotRound /></el-icon>{{ agent.category || '未分类' }}</el-tag>
-            <el-tag :type="agent.support_files ? 'success' : 'info'" plain>
-              <el-icon><Files /></el-icon>文件{{ agent.support_files ? '支持' : '不支持' }}
-            </el-tag>
-            <el-tag :type="agent.support_images ? 'success' : 'info'" plain>
-              <el-icon><Picture /></el-icon>图片{{ agent.support_images ? '支持' : '不支持' }}
-            </el-tag>
-          </div>
-        </div>
-      </el-card>
-
-      <el-card shadow="never">
-        <template #header>当前 task_run</template>
-        <el-descriptions :column="1" border>
-          <el-descriptions-item label="Run ID">{{ currentRunId || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="状态">
-            <el-tag v-if="currentRunStatus" effect="plain">{{ currentRunStatus }}</el-tag>
-            <span v-else>idle</span>
-          </el-descriptions-item>
-          <el-descriptions-item label="说明">{{ currentRunStatusMessage || '-' }}</el-descriptions-item>
-        </el-descriptions>
-      </el-card>
-
-      <el-card shadow="never">
-        <template #header>
-          <div class="panel-header">
-            <span>输出文件</span>
-            <el-tag effect="plain">{{ outputFiles.length }}</el-tag>
-          </div>
-        </template>
-        <div class="output-list">
-          <el-button
-            v-for="file in outputFiles"
-            :key="file.id"
-            link
-            type="primary"
-            :icon="Document"
-            @click="downloadFile(file)"
-          >
-            {{ file.original_name }} · {{ formatFileSize(file.file_size) }}
-          </el-button>
-          <el-empty v-if="outputFiles.length === 0" description="暂无输出文件" />
-        </div>
-      </el-card>
-    </aside>
-
-    <el-drawer v-model="detailDrawerVisible" title="Agent 详情" size="360px">
-      <div v-if="agent" class="agent-detail drawer-detail">
-        <h2>{{ agent.name }}</h2>
-        <p>{{ agent.description || '暂无说明' }}</p>
-        <div class="capability-tags">
-          <el-tag :type="riskTagType(agent.risk_level)" effect="plain">{{ agent.risk_level }}</el-tag>
-          <el-tag plain>{{ agent.category || '未分类' }}</el-tag>
-          <el-tag :type="agent.support_files ? 'success' : 'info'" plain>
-            文件{{ agent.support_files ? '支持' : '不支持' }}
-          </el-tag>
-          <el-tag :type="agent.support_images ? 'success' : 'info'" plain>
-            图片{{ agent.support_images ? '支持' : '不支持' }}
-          </el-tag>
-        </div>
-      </div>
-    </el-drawer>
   </section>
 </template>
 
 <style scoped>
 .chat-page {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr) 300px;
+  grid-template-columns: 280px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: 16px;
   align-items: stretch;
@@ -1336,29 +1213,37 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
+.panel-header--stacked {
+  align-items: flex-start;
+}
+
+.panel-header--stacked > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.panel-header--stacked strong,
+.panel-header--stacked small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-header--stacked small {
+  color: #6f7785;
+  font-size: 12px;
+}
+
 .panel-header-actions {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.agent-list,
-.conversation-list,
-.output-list {
+.conversation-list {
   display: grid;
   gap: 8px;
-}
-
-.agent-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
-}
-
-.agent-row:hover .agent-select,
-.agent-row.active .agent-select {
-  background: #dfe9fb;
 }
 
 .list-item {
@@ -1381,10 +1266,6 @@ onBeforeUnmount(() => {
 .list-item:hover,
 .list-item.active {
   background: #dfe9fb;
-}
-
-.agent-select {
-  border-radius: 20px;
 }
 
 .new-conversation-button {
@@ -1437,57 +1318,9 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-.mobile-detail-button {
-  display: none;
-  margin-bottom: 12px;
-}
-
-.agent-detail {
-  display: grid;
-  gap: 12px;
-}
-
-.agent-detail h2,
-.agent-detail p {
-  margin: 0;
-}
-
-.agent-detail h2 {
-  font-size: 18px;
-}
-
-.agent-detail p {
-  color: #6f7785;
-  line-height: 1.6;
-}
-
-.capability-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.output-list .el-button {
-  justify-content: flex-start;
-  min-width: 0;
-  white-space: normal;
-}
-
 @media (max-width: 1180px) {
   .chat-page {
     grid-template-columns: 260px minmax(0, 1fr);
-  }
-
-  .chat-main {
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .details-panel {
-    display: none;
-  }
-
-  .mobile-detail-button {
-    display: inline-flex;
   }
 }
 
@@ -1500,8 +1333,7 @@ onBeforeUnmount(() => {
   }
 
   .left-panel {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    max-height: 172px;
+    max-height: 180px;
     overflow-y: auto;
   }
 
@@ -1513,9 +1345,8 @@ onBeforeUnmount(() => {
     padding: 10px 12px;
   }
 
-  .agent-list,
   .conversation-list {
-    max-height: 92px;
+    max-height: 96px;
     overflow-y: auto;
   }
 
@@ -1528,7 +1359,6 @@ onBeforeUnmount(() => {
 
 @media (max-width: 560px) {
   .left-panel {
-    grid-template-columns: 1fr;
     max-height: 220px;
   }
 }
