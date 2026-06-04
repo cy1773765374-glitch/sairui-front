@@ -6,6 +6,7 @@ import { ElMessage } from 'element-plus'
 import { approveAdminUser, disableAdminUser, fetchAdminUsers } from '../api/adminUsers'
 import type { User, UserStatus } from '../api/auth'
 import { useAuthStore } from '../stores/auth'
+import { formatDateTimeShanghai } from '../utils/time'
 
 const authStore = useAuthStore()
 const loading = ref(false)
@@ -81,7 +82,9 @@ onMounted(loadUsers)
             <el-tag :type="statusTagType(row.status)" effect="plain">{{ row.status }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="注册时间" min-width="190" />
+        <el-table-column label="注册时间" min-width="190">
+          <template #default="{ row }: { row: User }">{{ formatDateTimeShanghai(row.created_at) }}</template>
+        </el-table-column>
         <el-table-column label="操作" width="210" fixed="right">
           <template #default="{ row }: { row: User }">
             <el-button
