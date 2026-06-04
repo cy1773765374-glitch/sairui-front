@@ -7,7 +7,6 @@ import type { TaskRunStatus } from '../api/runs'
 import type { LocalMessage } from '../api/conversations'
 import FileUploader from './FileUploader.vue'
 import MessageBubble from './MessageBubble.vue'
-import RunStatus from './RunStatus.vue'
 
 const props = defineProps<{
   title: string
@@ -74,13 +73,6 @@ watch(
       </el-tag>
     </header>
 
-    <RunStatus
-      :run-id="runId"
-      :status="runStatus"
-      :message="runStatusMessage"
-      :output-files="outputFiles"
-    />
-
     <div ref="scrollRef" class="message-list">
       <el-alert
         v-if="errorMessage"
@@ -91,7 +83,10 @@ watch(
         :closable="false"
       />
       <el-skeleton v-if="loading" :rows="5" animated />
-      <el-empty v-else-if="messages.length === 0" description="暂无消息，发送一句开始对话。" />
+      <div v-else-if="messages.length === 0" class="empty-chat">
+        <h2>{{ title }}</h2>
+        <p>发送一条消息开始对话。</p>
+      </div>
       <MessageBubble
         v-for="message in messages"
         v-else
@@ -105,6 +100,9 @@ watch(
     <footer class="composer">
       <div v-if="sending" class="response-status">
         Agent 正在响应<template v-if="activeRunCount > 1">（{{ activeRunCount }} 个任务进行中）</template>
+      </div>
+      <div v-else-if="runStatusMessage" class="response-status">
+        {{ runStatusMessage }}
       </div>
       <div class="attachment-row">
         <FileUploader @uploaded="(file) => emit('fileUploaded', file)" />
@@ -225,14 +223,30 @@ p {
   background: #ffffff;
 }
 
-.chat-window :deep(.run-status) {
-  flex: 0 0 auto;
-}
-
 .chat-error,
 .response-status,
 .attachment-row {
   grid-column: 1 / -1;
+}
+
+.empty-chat {
+  display: grid;
+  flex: 1 1 auto;
+  place-content: center;
+  gap: 8px;
+  min-height: 260px;
+  color: #667085;
+  text-align: center;
+}
+
+.empty-chat h2,
+.empty-chat p {
+  margin: 0;
+}
+
+.empty-chat h2 {
+  color: #202124;
+  font-size: 24px;
 }
 
 .response-status {

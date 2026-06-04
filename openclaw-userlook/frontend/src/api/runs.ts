@@ -51,8 +51,22 @@ export interface TaskRun {
   output_files: UserFile[]
 }
 
+export interface DeleteSkippedItem {
+  id: number
+  reason: string
+}
+
+export interface BatchDeleteRunsResponse {
+  deleted_ids: number[]
+  skipped: DeleteSkippedItem[]
+}
+
 export function isActiveRunStatus(status?: TaskRunStatus | '' | null): boolean {
   return status === 'pending' || status === 'queued' || status === 'running'
+}
+
+export function isTerminalRunStatus(status?: TaskRunStatus | '' | null): boolean {
+  return status === 'success' || status === 'failed' || status === 'cancelled' || status === 'timeout' || status === 'stale'
 }
 
 export async function fetchRuns(params: FetchRunsParams = {}): Promise<TaskRun[]> {
@@ -67,5 +81,16 @@ export async function fetchRun(runId: number): Promise<TaskRun> {
 
 export async function cancelRun(runId: number): Promise<TaskRun> {
   const response = await apiClient.post<TaskRun>(`/api/runs/${runId}/cancel`)
+  return response.data
+}
+
+export async function deleteRun(runId: number): Promise<void> {
+  await apiClient.delete(`/api/runs/${runId}`)
+}
+
+export async function batchDeleteRuns(runIds: number[]): Promise<BatchDeleteRunsResponse> {
+  const response = await apiClient.post<BatchDeleteRunsResponse>('/api/runs/batch-delete', {
+    run_ids: runIds,
+  })
   return response.data
 }

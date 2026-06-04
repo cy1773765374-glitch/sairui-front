@@ -1,17 +1,30 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { Download, Refresh } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { Delete, Download, Refresh } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { downloadFile, fetchFiles, formatFileSize, type UserFile } from '../api/files'
+import {
+  batchDeleteFiles,
+  deleteFile,
+  downloadFile,
+  fetchFiles,
+  formatFileSize,
+  type UserFile,
+} from '../api/files'
+import BatchDeleteToolbar from '../components/BatchDeleteToolbar.vue'
+import { formatDateTimeShanghai } from '../utils/time'
 
 const loading = ref(false)
+const deleting = ref(false)
 const files = ref<UserFile[]>([])
+const selectedFiles = ref<UserFile[]>([])
+const tableRef = ref()
 
 async function loadFiles() {
   loading.value = true
   try {
     files.value = await fetchFiles()
+    selectedFiles.value = []
   } catch {
     ElMessage.error('文件列表加载失败')
   } finally {
@@ -29,6 +42,67 @@ function purposeLabel(purpose: UserFile['purpose']) {
   return '临时'
 }
 
+function onSelectionChange(rows: UserFile[]) {
+  selectedFiles.value = rows
+}
+
+function clearSelection() {
+  tableRef.value?.clearSelection()
+  selectedFiles.value = []
+}
+
+async function confirmDeleteFile(row: UserFile) {
+  try {
+    await ElMessageBox.confirm('确认删除该文件？', '删除文件', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+    })
+  } catch {
+    return
+  }
+
+  deleting.value = true
+  try {
+    await deleteFile(row.id)
+    ElMessage.success('文件已删除')
+    await loadFiles()
+  } catch {
+    ElMessage.error('文件删除失败')
+  } finally {
+    deleting.value = false
+  }
+}
+
+async function confirmBatchDelete() {
+  try {
+    await ElMessageBox.confirm(`确认删除选中的 ${selectedFiles.value.length} 个文件？`, '批量删除文件', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+    })
+  } catch {
+    return
+  }
+
+  deleting.value = true
+  try {
+    const result = await batchDeleteFiles(selectedFiles.value.map((file) => file.id))
+    if (result.skipped.length > 0) {
+      ElMessage.warning(`已删除 ${result.deleted_ids.length} 个文件，跳过 ${result.skipped.length} 个`)
+    } else {
+      ElMessage.success(`已删除 ${result.deleted_ids.length} 个文件`)
+    }
+    await loadFiles()
+  } catch {
+    ElMessage.error('批量删除文件失败')
+  } finally {
+    deleting.value = false
+  }
+}
+
 onMounted(loadFiles)
 </script>
 
@@ -44,28 +118,41 @@ onMounted(loadFiles)
     </header>
 
     <el-card class="table-card" shadow="never">
-      <el-table v-loading="loading" :data="files">
+      <BatchDeleteToolbar
+        :selected-count="selectedFiles.length"
+        :loading="deleting"
+        @delete-selected="confirmBatchDelete"
+        @clear-selection="clearSelection"
+      />
+
+      <el-table ref="tableRef" v-loading="loading" :data="files" row-key="id" @selection-change="onSelectionChange">
+        <el-table-column type="selection" width="48" />
         <el-table-column label="文件名" min-width="260">
-          <template #default="{ row }">
+          <template #default="{ row }: { row: UserFile }">
             <span class="file-name">{{ row.original_name }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="file_type" label="类型" width="120" />
         <el-table-column label="大小" width="120">
-          <template #default="{ row }">{{ formatFileSize(row.file_size) }}</template>
+          <template #default="{ row }: { row: UserFile }">{{ formatFileSize(row.file_size) }}</template>
         </el-table-column>
         <el-table-column label="purpose" width="120">
-          <template #default="{ row }">
+          <template #default="{ row }: { row: UserFile }">
             <el-tag :type="row.purpose === 'output' ? 'success' : 'info'" effect="plain">
               {{ purposeLabel(row.purpose) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" min-width="180" />
-        <el-table-column label="操作" width="120" fixed="right">
-          <template #default="{ row }">
+        <el-table-column label="创建时间" min-width="180">
+          <template #default="{ row }: { row: UserFile }">{{ formatDateTimeShanghai(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="180" fixed="right">
+          <template #default="{ row }: { row: UserFile }">
             <el-button link type="primary" :icon="Download" @click="downloadFile(row)">
               下载
+            </el-button>
+            <el-button link type="danger" :icon="Delete" @click="confirmDeleteFile(row)">
+              删除
             </el-button>
           </template>
         </el-table-column>

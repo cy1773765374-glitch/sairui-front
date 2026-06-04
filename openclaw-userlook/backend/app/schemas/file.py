@@ -21,3 +21,17 @@ class FileRead(BaseModel):
 class FileUploadResponse(BaseModel):
     file_id: int
     file: FileRead
+
+
+class BatchDeleteFilesRequest(BaseModel):
+    file_ids: list[int]
+
+
+class DeleteSkippedItem(BaseModel):
+    id: int
+    reason: str
+
+
+class BatchDeleteFilesResponse(BaseModel):
+    deleted_ids: list[int]
+    skipped: list[DeleteSkippedItem]

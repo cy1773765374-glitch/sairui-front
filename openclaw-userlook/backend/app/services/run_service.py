@@ -220,6 +220,7 @@ def get_task_run_by_client_message(
         select(TaskRun)
         .where(TaskRun.conversation_id == conversation_id)
         .where(TaskRun.client_message_id == client_message_id)
+        .where(TaskRun.deleted_at.is_(None))
         .order_by(TaskRun.id.asc())
     )
 
@@ -425,7 +426,7 @@ def mark_task_run_stale(db: Session, run: TaskRun, message: str) -> TaskRun:
 
 def request_task_run_cancel(db: Session, current_user: User, run_id: int) -> TaskRun:
     run = db.get(TaskRun, run_id)
-    if run is None:
+    if run is None or run.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found")
     if current_user.role != UserRole.admin and run.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found")
@@ -453,6 +454,7 @@ def list_task_runs(
     active_only: bool = False,
 ) -> list[TaskRunRead]:
     id_statement = select(TaskRun.id).order_by(TaskRun.created_at.desc(), TaskRun.id.desc())
+    id_statement = id_statement.where(TaskRun.deleted_at.is_(None))
     if current_user.role != UserRole.admin:
         id_statement = id_statement.where(TaskRun.user_id == current_user.id)
     if agent_id is not None:
@@ -488,11 +490,47 @@ def list_task_runs(
 
 def get_task_run_detail(db: Session, current_user: User, run_id: int) -> TaskRunRead:
     run = db.get(TaskRun, run_id)
-    if run is None:
+    if run is None or run.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found")
     if current_user.role != UserRole.admin and run.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found")
     return _to_read(db, run)
+
+
+def delete_task_run(db: Session, current_user: User, run_id: int) -> None:
+    run = db.get(TaskRun, run_id)
+    if run is None or run.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found")
+    if current_user.role != UserRole.admin and run.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found")
+    if run.status not in TERMINAL_RUN_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="active run cannot be deleted",
+        )
+    run.deleted_at = _utc_now()
+    db.commit()
+
+
+def batch_delete_task_runs(db: Session, current_user: User, run_ids: list[int]) -> dict[str, list[object]]:
+    deleted_ids: list[int] = []
+    skipped: list[dict[str, object]] = []
+    for run_id in list(dict.fromkeys(run_ids)):
+        run = db.get(TaskRun, run_id)
+        if run is None or run.deleted_at is not None:
+            skipped.append({"id": run_id, "reason": "not_found"})
+            continue
+        if current_user.role != UserRole.admin and run.user_id != current_user.id:
+            skipped.append({"id": run_id, "reason": "not_found"})
+            continue
+        if run.status not in TERMINAL_RUN_STATUSES:
+            skipped.append({"id": run_id, "reason": "active"})
+            continue
+        run.deleted_at = _utc_now()
+        deleted_ids.append(run.id)
+    if deleted_ids:
+        db.commit()
+    return {"deleted_ids": deleted_ids, "skipped": skipped}
 
 
 def get_latest_active_run_for_conversation(
@@ -504,6 +542,7 @@ def get_latest_active_run_for_conversation(
         select(TaskRun)
         .where(TaskRun.conversation_id == conversation_id)
         .where(TaskRun.status.in_(ACTIVE_RUN_STATUSES))
+        .where(TaskRun.deleted_at.is_(None))
         .order_by(TaskRun.created_at.desc(), TaskRun.id.desc())
     )
     if current_user.role != UserRole.admin:
@@ -519,6 +558,7 @@ def has_active_run_for_conversation(db: Session, current_user: User, conversatio
         select(TaskRun.id)
         .where(TaskRun.conversation_id == conversation_id)
         .where(TaskRun.status.in_(ACTIVE_RUN_STATUSES))
+        .where(TaskRun.deleted_at.is_(None))
     )
     if current_user.role != UserRole.admin:
         statement = statement.where(TaskRun.user_id == current_user.id)
