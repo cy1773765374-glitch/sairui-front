@@ -61,6 +61,7 @@ ALLOWED_EXTENSIONS = {
 SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._ -]+")
 CHUNK_SIZE = 1024 * 1024
 INVALID_FILE_IDS_DETAIL = "上传文件记录无效，请重新上传后再发送"
+INVALID_FILE_IDS_CODE = "INVALID_UPLOAD_FILES"
 MISSING_UPLOAD_FILE_DETAIL = "上传文件已失效，请重新上传后再发送"
 
 
@@ -100,12 +101,24 @@ def _ensure_allowed_file(filename: str) -> str:
     return ext
 
 
+def _invalid_upload_files_exception(invalid_file_ids: list[int]) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={
+            "detail": INVALID_FILE_IDS_DETAIL,
+            "code": INVALID_FILE_IDS_CODE,
+            "invalid_file_ids": invalid_file_ids,
+        },
+    )
+
+
 def file_to_read(file: File) -> FileRead:
     return FileRead(
         id=file.id,
         user_id=file.user_id,
         original_name=file.original_name,
         file_type=file.file_type,
+        mime_type=file.mime_type,
         file_size=file.file_size,
         purpose=file.purpose,
         created_at=file.created_at,
@@ -124,7 +137,7 @@ def validate_user_upload_file_ids(db: Session, current_user: User, file_ids: lis
     if not file_ids:
         return
 
-    unique_file_ids = set(file_ids)
+    unique_file_ids = list(dict.fromkeys(file_ids))
     owned_file_ids = set(
         db.scalars(
             select(File.id).where(
@@ -135,11 +148,9 @@ def validate_user_upload_file_ids(db: Session, current_user: User, file_ids: lis
             )
         )
     )
-    if owned_file_ids != unique_file_ids:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=INVALID_FILE_IDS_DETAIL,
-        )
+    invalid_file_ids = [file_id for file_id in unique_file_ids if file_id not in owned_file_ids]
+    if invalid_file_ids:
+        raise _invalid_upload_files_exception(invalid_file_ids)
 
 
 def list_gateway_upload_files(db: Session, current_user: User, file_ids: list[int]) -> list[dict[str, object]]:
@@ -161,10 +172,8 @@ def list_gateway_upload_files(db: Session, current_user: User, file_ids: list[in
     )
     files_by_id = {file.id: file for file in files}
     if set(files_by_id) != set(unique_file_ids):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=INVALID_FILE_IDS_DETAIL,
-        )
+        invalid_file_ids = [file_id for file_id in unique_file_ids if file_id not in files_by_id]
+        raise _invalid_upload_files_exception(invalid_file_ids)
 
     gateway_files: list[dict[str, object]] = []
     for file_id in unique_file_ids:
@@ -230,6 +239,7 @@ async def save_upload_file(db: Session, current_user: User, upload: UploadFile) 
         original_name=original_name,
         stored_path=str(target_path),
         file_type=ext,
+        mime_type=upload.content_type,
         file_size=size,
         purpose=FilePurpose.upload,
     )
@@ -340,6 +350,7 @@ def register_output_files(db: Session, user_id: int, output_dir: str | None) -> 
             original_name=resolved.name,
             stored_path=str(resolved),
             file_type=ext,
+            mime_type=None,
             file_size=resolved.stat().st_size,
             purpose=FilePurpose.output,
         )

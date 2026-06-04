@@ -202,12 +202,20 @@ async def chat_websocket(
                         inbound_message.file_ids,
                     )
                 except HTTPException as exc:
-                    detail = exc.detail if isinstance(exc.detail, str) else "上传文件无效，请重新上传后再发送"
+                    if isinstance(exc.detail, dict):
+                        detail = str(exc.detail.get("detail") or "上传文件无效，请重新上传后再发送")
+                        code = str(exc.detail.get("code") or "INVALID_UPLOAD_FILES")
+                        invalid_file_ids = exc.detail.get("invalid_file_ids") or []
+                    else:
+                        detail = exc.detail if isinstance(exc.detail, str) else "上传文件无效，请重新上传后再发送"
+                        code = "INVALID_UPLOAD_FILES"
+                        invalid_file_ids = inbound_message.file_ids
                     await send_json(
                         {
                             "type": "error",
-                            "code": "invalid_file_ids",
+                            "code": code,
                             "message": detail,
+                            "invalid_file_ids": invalid_file_ids,
                             "conversation_id": conversation.id,
                             "client_message_id": client_message_id,
                         }

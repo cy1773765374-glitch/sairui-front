@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowDown, ArrowRight, Delete, EditPen, Expand, Fold, Plus } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowRight, Delete, EditPen, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 
 import { fetchAgent, fetchAgents, type Agent } from '../api/agents'
@@ -64,6 +64,7 @@ type ServerWsMessage =
   | {
       type: 'error'
       code?: string
+      invalid_file_ids?: number[]
       conversation_id?: number
       run_id?: number
       client_message_id?: string | null
@@ -119,13 +120,15 @@ let reconnectAttempts = 0
 let unmounted = false
 let suppressRouteWatch = false
 let activeInitializeRequestId = 0
+const pendingDraftClearers = new Map<string, () => void>()
+const pendingSentFileIds = new Map<string, number[]>()
 
-const title = computed(() => agent.value?.name ?? 'Agent 对话')
-const subtitle = computed(() => {
-  if (!conversation.value) {
-    return '正在准备会话'
+const title = computed(() => {
+  const manualTitle = conversation.value?.is_title_manual ? conversation.value.title.trim() : ''
+  if (manualTitle) {
+    return manualTitle
   }
-  return conversation.value.title
+  return agent.value?.name ?? conversation.value?.agent_name ?? 'Agent 对话'
 })
 
 const conversationGroups = computed<ConversationAgentGroup[]>(() => {
@@ -505,6 +508,23 @@ function removeOptimisticUserMessage(conversationId: number, clientMessageId: st
   )
 }
 
+function isInvalidUploadFilePayload(payload: ServerWsMessage) {
+  if (payload.type !== 'error') {
+    return false
+  }
+  const code = String(payload.code ?? '').toLowerCase()
+  return code === 'invalid_upload_files' || code === 'invalid_file_ids' || payload.message === 'invalid file_ids'
+}
+
+function removeInvalidAttachedFiles(invalidFileIds: number[] | undefined) {
+  if (!invalidFileIds || invalidFileIds.length === 0) {
+    attachedFiles.value = []
+    return
+  }
+  const invalidSet = new Set(invalidFileIds)
+  attachedFiles.value = attachedFiles.value.filter((file) => !invalidSet.has(file.id))
+}
+
 function scheduleReconnect(conversationId: number) {
   if (conversation.value?.id !== conversationId || unmounted) {
     return
@@ -625,6 +645,16 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       runtime.currentClientMessageId = payload.client_message_id ?? runtime.currentClientMessageId
       runtime.currentRunStatus = payload.status === 'queued' ? 'queued' : payload.status
       runtime.currentRunStatusMessage = ''
+      if (payload.client_message_id) {
+        pendingDraftClearers.get(payload.client_message_id)?.()
+        pendingDraftClearers.delete(payload.client_message_id)
+        const sentFileIds = pendingSentFileIds.get(payload.client_message_id) ?? []
+        if (sentFileIds.length > 0) {
+          const sentFileIdSet = new Set(sentFileIds)
+          attachedFiles.value = attachedFiles.value.filter((file) => !sentFileIdSet.has(file.id))
+        }
+        pendingSentFileIds.delete(payload.client_message_id)
+      }
       if (isActiveRunStatus(runtime.currentRunStatus)) {
         markRunActive(conversationId, payload.run_id)
       } else {
@@ -763,12 +793,16 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
     if (!isCurrentSocket(nextSocket, conversationId)) {
       return
     }
-    if (payload.code === 'invalid_file_ids' || payload.message === 'invalid file_ids') {
-      attachedFiles.value = []
+    if (isInvalidUploadFilePayload(payload)) {
+      removeInvalidAttachedFiles(payload.invalid_file_ids)
       removeOptimisticUserMessage(conversationId, payload.client_message_id)
     }
+    if (payload.client_message_id) {
+      pendingDraftClearers.delete(payload.client_message_id)
+      pendingSentFileIds.delete(payload.client_message_id)
+    }
     errorMessage.value = payload.message
-    ElMessage.error(payload.message)
+    currentRunStatusMessage.value = payload.message
     const errorRunId = payload.run_id ?? currentRunId.value ?? undefined
     const target = findAssistantMessage(conversationId, null, errorRunId)
     if (target) {
@@ -793,6 +827,8 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
 
 function closeActiveSocket() {
   clearReconnectTimer()
+  pendingDraftClearers.clear()
+  pendingSentFileIds.clear()
   if (socketConversationId !== null) {
     stopRunPolling(socketConversationId)
   }
@@ -1077,7 +1113,7 @@ async function selectConversation(nextConversation: Conversation) {
   }
 }
 
-async function sendMessage(content: string, fileIds: number[]) {
+async function sendMessage(content: string, fileIds: number[], clearDraft: () => void) {
   if (
     !socket ||
     socket.readyState !== WebSocket.OPEN ||
@@ -1089,6 +1125,8 @@ async function sendMessage(content: string, fileIds: number[]) {
   }
 
   const clientMessageId = createClientMessageId()
+  pendingDraftClearers.set(clientMessageId, clearDraft)
+  pendingSentFileIds.set(clientMessageId, fileIds)
   sending.value = true
   errorMessage.value = ''
   outputFiles.value = []
@@ -1117,8 +1155,10 @@ async function sendMessage(content: string, fileIds: number[]) {
         client_message_id: clientMessageId,
       }),
     )
-    attachedFiles.value = []
   } catch {
+    pendingDraftClearers.delete(clientMessageId)
+    pendingSentFileIds.delete(clientMessageId)
+    removeOptimisticUserMessage(conversation.value.id, clientMessageId)
     sending.value = false
     currentRunId.value = null
     currentClientMessageId.value = null
@@ -1164,8 +1204,13 @@ async function stopCurrentRun() {
 }
 
 function addUploadedFile(file: UserFile) {
-  if (!attachedFiles.value.some((item) => item.id === file.id)) {
-    attachedFiles.value.push(file)
+  if (!Number.isFinite(Number(file.id))) {
+    ElMessage.error('上传文件记录无效，请重新上传后再发送')
+    return
+  }
+  const normalizedFile = { ...file, id: Number(file.id) }
+  if (!attachedFiles.value.some((item) => item.id === normalizedFile.id)) {
+    attachedFiles.value.push(normalizedFile)
   }
 }
 
@@ -1253,6 +1298,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unmounted = true
   clearReconnectTimer()
+  pendingDraftClearers.clear()
+  pendingSentFileIds.clear()
   stopRunPolling()
   if (socket) {
     socket.onclose = null
@@ -1264,14 +1311,8 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="chat-page" :class="{ 'chat-page--sidebar-collapsed': chatSidebarCollapsed }">
-    <aside class="chat-panel left-panel" :class="{ 'left-panel--collapsed': chatSidebarCollapsed }">
-      <div v-if="chatSidebarCollapsed" class="collapsed-chat-sidebar">
-        <el-tooltip content="展开会话栏">
-          <el-button :icon="Expand" circle plain @click="toggleChatSidebar" />
-        </el-tooltip>
-      </div>
-
-      <el-card v-else shadow="never">
+    <aside v-if="!chatSidebarCollapsed" class="chat-panel left-panel">
+      <el-card shadow="never">
         <template #header>
           <div class="panel-header panel-header--stacked">
             <div>
@@ -1290,9 +1331,6 @@ onBeforeUnmount(() => {
                   :disabled="!agent"
                   @click="createNewConversationForCurrentAgent"
                 />
-              </el-tooltip>
-              <el-tooltip content="收起会话栏">
-                <el-button :icon="Fold" circle plain size="small" @click="toggleChatSidebar" />
               </el-tooltip>
             </div>
           </div>
@@ -1373,7 +1411,6 @@ onBeforeUnmount(() => {
     <main class="chat-main">
       <ChatWindow
         :title="title"
-        :subtitle="subtitle"
         :messages="messages"
         :connected="connected"
         :sending="sending"
@@ -1386,12 +1423,14 @@ onBeforeUnmount(() => {
         :output-files="outputFiles"
         :active-run-count="activeRunCount"
         :can-export="!!conversation"
+        :chat-sidebar-collapsed="chatSidebarCollapsed"
         @send="sendMessage"
         @stop="stopCurrentRun"
         @stop-run="stopRun"
         @file-uploaded="addUploadedFile"
         @remove-file="removeAttachedFile"
         @export-conversation="exportCurrentConversation"
+        @toggle-chat-sidebar="toggleChatSidebar"
       />
     </main>
   </section>
@@ -1412,7 +1451,7 @@ onBeforeUnmount(() => {
 }
 
 .chat-page--sidebar-collapsed {
-  grid-template-columns: 52px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .chat-panel {
@@ -1422,19 +1461,6 @@ onBeforeUnmount(() => {
   max-height: 100%;
   min-height: 0;
   overflow-y: auto;
-}
-
-.left-panel--collapsed {
-  overflow: hidden;
-}
-
-.collapsed-chat-sidebar {
-  display: grid;
-  min-height: 52px;
-  place-items: center;
-  border: 1px solid #dfe5ee;
-  border-radius: 8px;
-  background: #ffffff;
 }
 
 .chat-panel .el-card {
@@ -1621,7 +1647,7 @@ onBeforeUnmount(() => {
   }
 
   .chat-page--sidebar-collapsed {
-    grid-template-columns: 52px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -1640,14 +1666,6 @@ onBeforeUnmount(() => {
   .left-panel {
     max-height: 180px;
     overflow-y: auto;
-  }
-
-  .left-panel--collapsed {
-    max-height: 52px;
-  }
-
-  .collapsed-chat-sidebar {
-    min-height: 44px;
   }
 
   .left-panel :deep(.el-card__header) {

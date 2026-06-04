@@ -14,8 +14,10 @@ import {
   type TaskRunStatus,
 } from '../api/runs'
 import BatchDeleteToolbar from '../components/BatchDeleteToolbar.vue'
+import { useAuthStore } from '../stores/auth'
 import { elapsedBetween, formatDateTimeShanghai, parseBackendTime } from '../utils/time'
 
+const authStore = useAuthStore()
 const loading = ref(false)
 const deleting = ref(false)
 const runs = ref<TaskRun[]>([])
@@ -48,10 +50,48 @@ const statusOptions: Array<TaskRunStatus> = [
 const hasFilters = computed(
   () => Boolean(filters.value.status || filters.value.agent_id || filters.value.run_type || filters.value.active_only),
 )
+const hiddenRunStorageKey = computed(
+  () => `openclaw_userlook_hidden_task_runs:${authStore.user?.id ?? authStore.user?.username ?? 'anonymous'}`,
+)
+const hiddenRunIds = ref<number[]>([])
+const visibleRuns = computed(() => {
+  if (authStore.isAdmin) {
+    return runs.value
+  }
+  const hidden = new Set(hiddenRunIds.value)
+  return runs.value.filter((run) => !hidden.has(run.id))
+})
+
+function loadHiddenRunIds() {
+  if (authStore.isAdmin) {
+    hiddenRunIds.value = []
+    return
+  }
+  try {
+    const rawValue = localStorage.getItem(hiddenRunStorageKey.value)
+    const parsed = rawValue ? JSON.parse(rawValue) : []
+    hiddenRunIds.value = Array.isArray(parsed)
+      ? parsed.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item > 0)
+      : []
+  } catch {
+    hiddenRunIds.value = []
+  }
+}
+
+function persistHiddenRunIds() {
+  localStorage.setItem(hiddenRunStorageKey.value, JSON.stringify(Array.from(new Set(hiddenRunIds.value))))
+}
+
+function hideRunsLocally(runIds: number[]) {
+  hiddenRunIds.value = Array.from(new Set([...hiddenRunIds.value, ...runIds]))
+  persistHiddenRunIds()
+  selectedRuns.value = selectedRuns.value.filter((run) => !hiddenRunIds.value.includes(run.id))
+}
 
 async function loadRuns() {
   loading.value = true
   try {
+    loadHiddenRunIds()
     runs.value = await fetchRuns({
       status: filters.value.status || undefined,
       agent_id: filters.value.agent_id,
@@ -122,9 +162,24 @@ async function confirmDeleteRun(row: TaskRun) {
     ElMessage.warning('运行中任务不能删除，请先取消或等待结束')
     return
   }
+  if (!authStore.isAdmin) {
+    try {
+      await ElMessageBox.confirm('仅从当前列表隐藏，不会删除任务记录。', '从列表移除', {
+        confirmButtonText: '从列表移除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      })
+    } catch {
+      return
+    }
+    hideRunsLocally([row.id])
+    ElMessage.success('任务已从当前列表移除')
+    return
+  }
+
   try {
-    await ElMessageBox.confirm('确认删除该历史任务？', '删除任务', {
-      confirmButtonText: '删除',
+    await ElMessageBox.confirm('将删除数据库任务记录，此操作不可恢复。', '删除记录', {
+      confirmButtonText: '删除记录',
       cancelButtonText: '取消',
       type: 'warning',
       confirmButtonClass: 'el-button--danger',
@@ -150,9 +205,29 @@ async function confirmBatchDelete() {
     ElMessage.warning('运行中任务不能删除，请先取消或等待结束')
     return
   }
+  if (!authStore.isAdmin) {
+    try {
+      await ElMessageBox.confirm(
+        `仅从当前列表隐藏选中的 ${selectedRuns.value.length} 个任务，不会删除任务记录。`,
+        '从列表移除',
+        {
+          confirmButtonText: '从列表移除',
+          cancelButtonText: '取消',
+          type: 'warning',
+        },
+      )
+    } catch {
+      return
+    }
+    hideRunsLocally(selectedRuns.value.map((run) => run.id))
+    clearSelection()
+    ElMessage.success('任务已从当前列表移除')
+    return
+  }
+
   try {
-    await ElMessageBox.confirm(`确认删除选中的 ${selectedRuns.value.length} 个历史任务？`, '批量删除任务', {
-      confirmButtonText: '删除',
+    await ElMessageBox.confirm(`将删除选中的 ${selectedRuns.value.length} 个数据库任务记录，此操作不可恢复。`, '批量删除记录', {
+      confirmButtonText: '删除记录',
       cancelButtonText: '取消',
       type: 'warning',
       confirmButtonClass: 'el-button--danger',
@@ -225,6 +300,7 @@ onMounted(async () => {
       <BatchDeleteToolbar
         :selected-count="selectedRuns.length"
         :loading="deleting"
+        :action-label="authStore.isAdmin ? '批量删除记录' : '批量从列表移除'"
         @delete-selected="confirmBatchDelete"
         @clear-selection="clearSelection"
       />
@@ -232,7 +308,7 @@ onMounted(async () => {
       <el-table
         ref="tableRef"
         v-loading="loading"
-        :data="runs"
+        :data="visibleRuns"
         row-key="id"
         @selection-change="onSelectionChange"
       >
@@ -335,7 +411,7 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column label="操作" width="110" fixed="right">
           <template #default="{ row }: { row: TaskRun }">
-            <el-tooltip :content="isTerminalRunStatus(row.status) ? '删除历史任务' : '运行中任务不能删除'">
+            <el-tooltip :content="isTerminalRunStatus(row.status) ? (authStore.isAdmin ? '删除数据库任务记录' : '仅从当前列表隐藏') : '运行中任务不能删除'">
               <span>
                 <el-button
                   link
@@ -344,7 +420,7 @@ onMounted(async () => {
                   :disabled="!isTerminalRunStatus(row.status)"
                   @click="confirmDeleteRun(row)"
                 >
-                  删除
+                  {{ authStore.isAdmin ? '删除记录' : '从列表移除' }}
                 </el-button>
               </span>
             </el-tooltip>

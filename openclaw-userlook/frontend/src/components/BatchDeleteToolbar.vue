@@ -4,6 +4,7 @@ import { Delete, Close } from '@element-plus/icons-vue'
 defineProps<{
   selectedCount: number
   loading?: boolean
+  actionLabel?: string
 }>()
 
 defineEmits<{
@@ -26,7 +27,7 @@ defineEmits<{
         :disabled="selectedCount === 0"
         @click="$emit('deleteSelected')"
       >
-        批量删除
+        {{ actionLabel || '批量删除' }}
       </el-button>
     </div>
   </div>

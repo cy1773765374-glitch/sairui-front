@@ -16,6 +16,7 @@ import {
 
 import { useAppStore } from '../stores/app'
 import { useAuthStore } from '../stores/auth'
+import sairuiLogo from '../assets/sairui-logo.png'
 
 const route = useRoute()
 const router = useRouter()
@@ -73,7 +74,9 @@ onBeforeUnmount(() => {
       :width="sidebarWidth"
     >
       <div class="brand">
-        <div class="brand-mark">O</div>
+        <div class="brand-mark">
+          <img class="brand-logo" :src="sairuiLogo" alt="赛锐Agent" />
+        </div>
         <div class="brand-copy">
           <strong>{{ appStore.systemName }}</strong>
         </div>
@@ -170,7 +173,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 10px 18px;
+  padding: 8px 0 18px;
 }
 
 .workbench-sidebar--collapsed .brand {
@@ -181,14 +184,21 @@ onBeforeUnmount(() => {
 }
 
 .brand-mark {
-  display: grid;
-  width: 36px;
-  height: 36px;
-  place-items: center;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #3f7ee8, #18a058);
-  color: #ffffff;
-  font-weight: 700;
+  display: flex;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.brand-logo {
+  display: block;
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
 }
 
 .brand-copy {
@@ -210,6 +220,8 @@ onBeforeUnmount(() => {
 
 .sidebar-toggle {
   flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
   margin-left: auto;
 }
 
@@ -235,6 +247,29 @@ onBeforeUnmount(() => {
   margin: 4px 0;
   border-radius: 20px;
   color: #3c4043;
+}
+
+.workbench-sidebar--collapsed .side-menu {
+  display: grid;
+  justify-items: center;
+}
+
+.workbench-sidebar--collapsed .side-menu.el-menu--collapse {
+  width: 48px;
+}
+
+.workbench-sidebar--collapsed .side-menu :deep(.el-menu-item) {
+  display: flex;
+  width: 40px;
+  height: 40px;
+  justify-content: center;
+  margin: 6px auto;
+  padding: 0 !important;
+  border-radius: 12px;
+}
+
+.workbench-sidebar--collapsed .side-menu :deep(.el-menu-item .el-icon) {
+  margin: 0;
 }
 
 .side-menu :deep(.el-menu-item.is-active) {

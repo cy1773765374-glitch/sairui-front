@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { Close, Connection, Download, Promotion, VideoPause } from '@element-plus/icons-vue'
+import { Close, Connection, Download, Expand, Fold, Promotion, VideoPause } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 
 import { formatFileSize, type UserFile } from '../api/files'
 import type { TaskRunStatus } from '../api/runs'
@@ -10,7 +11,6 @@ import MessageBubble from './MessageBubble.vue'
 
 const props = defineProps<{
   title: string
-  subtitle: string
   messages: LocalMessage[]
   connected: boolean
   sending: boolean
@@ -23,30 +23,48 @@ const props = defineProps<{
   outputFiles: UserFile[]
   activeRunCount: number
   canExport?: boolean
+  chatSidebarCollapsed: boolean
 }>()
 
 const emit = defineEmits<{
-  send: [content: string, fileIds: number[]]
+  send: [content: string, fileIds: number[], clearDraft: () => void]
   stop: []
   stopRun: [runId: number]
   fileUploaded: [file: UserFile]
   removeFile: [fileId: number]
   exportConversation: []
+  toggleChatSidebar: []
 }>()
 
 const draft = ref('')
 const scrollRef = ref<HTMLElement | null>(null)
+const uploadingFileCount = ref(0)
 
-const canSend = computed(() => props.connected && draft.value.trim().length > 0)
+const filesUploading = computed(() => uploadingFileCount.value > 0)
+const canSend = computed(() => props.connected && !filesUploading.value && draft.value.trim().length > 0)
 const canStop = computed(() => ['pending', 'queued', 'running', 'stale'].includes(props.runStatus))
 
 function send() {
   const content = draft.value.trim()
-  if (!content || !canSend.value) {
+  if (!content) {
     return
   }
-  draft.value = ''
-  emit('send', content, props.attachedFiles.map((file) => file.id))
+  if (filesUploading.value) {
+    ElMessage.warning('文件仍在上传中，请稍后再发送')
+    return
+  }
+  if (!canSend.value) {
+    return
+  }
+  emit('send', content, props.attachedFiles.map((file) => file.id), () => {
+    if (draft.value.trim() === content) {
+      draft.value = ''
+    }
+  })
+}
+
+function onUploadingChange(uploading: boolean) {
+  uploadingFileCount.value = uploading ? 1 : 0
 }
 
 async function scrollToBottom() {
@@ -65,9 +83,18 @@ watch(
 <template>
   <section class="chat-window">
     <header class="chat-header">
-      <div>
+      <div class="chat-header__left">
+        <el-tooltip :content="chatSidebarCollapsed ? '展开会话栏' : '收起会话栏'">
+          <el-button
+            :icon="chatSidebarCollapsed ? Expand : Fold"
+            circle
+            plain
+            @click="emit('toggleChatSidebar')"
+          />
+        </el-tooltip>
+      </div>
+      <div class="chat-header__center">
         <h1>{{ title }}</h1>
-        <p>{{ subtitle }}</p>
       </div>
       <div class="chat-header__actions">
         <el-tooltip content="导出对话">
@@ -118,7 +145,11 @@ watch(
         {{ runStatusMessage }}
       </div>
       <div class="attachment-row">
-        <FileUploader @uploaded="(file) => emit('fileUploaded', file)" />
+        <FileUploader
+          @uploaded="(file) => emit('fileUploaded', file)"
+          @uploading-change="onUploadingChange"
+        />
+        <el-tag v-if="filesUploading" effect="plain">文件上传中</el-tag>
         <el-tag
           v-for="file in attachedFiles"
           :key="file.id"
@@ -183,19 +214,31 @@ watch(
 
 .chat-header {
   flex: 0 0 auto;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto minmax(120px, 1fr);
+  align-items: center;
   gap: 16px;
   padding: 18px 20px;
   border-bottom: 1px solid #dfe5ee;
   background: #ffffff;
 }
 
+.chat-header__left {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.chat-header__center {
+  min-width: 0;
+  justify-self: center;
+  text-align: center;
+}
+
 .chat-header__actions {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
+  justify-self: end;
   gap: 10px;
 }
 
@@ -207,6 +250,9 @@ p {
 h1 {
   font-size: 20px;
   line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 p {
@@ -312,6 +358,10 @@ p {
   .composer {
     padding-left: 14px;
     padding-right: 14px;
+  }
+
+  .chat-header {
+    grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
   .composer {

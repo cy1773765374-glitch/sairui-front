@@ -498,10 +498,11 @@ def get_task_run_detail(db: Session, current_user: User, run_id: int) -> TaskRun
 
 
 def delete_task_run(db: Session, current_user: User, run_id: int) -> None:
+    if current_user.role != UserRole.admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin permission required")
+
     run = db.get(TaskRun, run_id)
     if run is None or run.deleted_at is not None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found")
-    if current_user.role != UserRole.admin and run.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found")
     if run.status not in TERMINAL_RUN_STATUSES:
         raise HTTPException(
@@ -513,6 +514,9 @@ def delete_task_run(db: Session, current_user: User, run_id: int) -> None:
 
 
 def batch_delete_task_runs(db: Session, current_user: User, run_ids: list[int]) -> dict[str, list[object]]:
+    if current_user.role != UserRole.admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin permission required")
+
     deleted_ids: list[int] = []
     skipped: list[dict[str, object]] = []
     for run_id in list(dict.fromkeys(run_ids)):
