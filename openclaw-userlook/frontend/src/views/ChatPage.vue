@@ -71,6 +71,7 @@ type ServerWsMessage =
 interface ConversationRuntimeState {
   sending: boolean
   activeAssistantMessageId: string | number | null
+  activeRunIds: number[]
   outputFiles: UserFile[]
   currentRunId: number | null
   currentClientMessageId: string | null
@@ -182,6 +183,7 @@ function createRuntimeState(): ConversationRuntimeState {
   return {
     sending: false,
     activeAssistantMessageId: null,
+    activeRunIds: [],
     outputFiles: [],
     currentRunId: null,
     currentClientMessageId: null,
@@ -264,7 +266,14 @@ function applyRunState(run: TaskRun | null) {
   runtime.currentRunStatus = run?.status ?? ''
   runtime.currentRunStatusMessage = run?.error_message ?? ''
   runtime.outputFiles = run?.output_files ?? []
-  runtime.sending = isActiveRunStatus(run?.status)
+  if (run?.id && isActiveRunStatus(run.status)) {
+    runtime.activeRunIds = Array.from(new Set([...runtime.activeRunIds, run.id]))
+  } else if (run?.id) {
+    runtime.activeRunIds = runtime.activeRunIds.filter((runId) => runId !== run.id)
+  } else {
+    runtime.activeRunIds = []
+  }
+  runtime.sending = runtime.activeRunIds.length > 0
   if (!runtime.sending) {
     runtime.activeAssistantMessageId = null
     if (run?.conversation_id) {
@@ -283,7 +292,7 @@ function resetConversationRuntimeState(conversationId?: number) {
 }
 
 function hasBlockingActiveRun() {
-  return currentRunId.value !== null && isActiveRunStatus(currentRunStatus.value)
+  return activeRuntime.value.activeRunIds.length > 0 || (currentRunId.value !== null && isActiveRunStatus(currentRunStatus.value))
 }
 
 function createClientMessageId() {
@@ -426,28 +435,37 @@ function isPayloadForConversation(
   if (payload.conversation_id !== undefined && payload.conversation_id !== conversationId) {
     return false
   }
-  const runtime = getRuntimeForConversation(conversationId)
-  if (payload.run_id !== undefined && runtime.currentRunId !== null && payload.run_id !== runtime.currentRunId) {
-    return false
-  }
-  if (
-    payload.client_message_id &&
-    runtime.currentClientMessageId &&
-    payload.client_message_id !== runtime.currentClientMessageId
-  ) {
-    return false
-  }
   return true
 }
 
 function findAssistantMessage(conversationId: number, messageId: string | number | null, runId?: number) {
   const list = getMessagesForConversation(conversationId)
   return list.find((message) => {
+    if (runId !== undefined && message.role === 'assistant' && message.run_id === runId) {
+      return true
+    }
     if (messageId !== null && message.id === messageId) {
       return true
     }
-    return runId !== undefined && message.role === 'assistant' && message.run_id === runId
+    return false
   })
+}
+
+function markRunActive(conversationId: number, runId?: number) {
+  if (runId === undefined) {
+    return
+  }
+  const runtime = getRuntimeForConversation(conversationId)
+  runtime.activeRunIds = Array.from(new Set([...runtime.activeRunIds, runId]))
+  runtime.sending = true
+}
+
+function markRunInactive(conversationId: number, runId?: number) {
+  const runtime = getRuntimeForConversation(conversationId)
+  if (runId !== undefined) {
+    runtime.activeRunIds = runtime.activeRunIds.filter((activeRunId) => activeRunId !== runId)
+  }
+  runtime.sending = runtime.activeRunIds.length > 0
 }
 
 function removeOptimisticUserMessage(conversationId: number, clientMessageId: string | null | undefined) {
@@ -580,7 +598,11 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       runtime.currentClientMessageId = payload.client_message_id ?? runtime.currentClientMessageId
       runtime.currentRunStatus = payload.status === 'queued' ? 'queued' : payload.status
       runtime.currentRunStatusMessage = ''
-      runtime.sending = isActiveRunStatus(runtime.currentRunStatus)
+      if (isActiveRunStatus(runtime.currentRunStatus)) {
+        markRunActive(conversationId, payload.run_id)
+      } else {
+        markRunInactive(conversationId, payload.run_id)
+      }
       if (runtime.sending) {
         startRunPolling(conversationId)
       }
@@ -595,11 +617,13 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       const runtime = getRuntimeForConversation(conversationId)
       currentRunId.value = payload.run_id ?? currentRunId.value
       currentClientMessageId.value = payload.client_message_id ?? currentClientMessageId.value
-      let target = findAssistantMessage(conversationId, runtime.activeAssistantMessageId, payload.run_id)
+      markRunActive(conversationId, payload.run_id)
+      let target = findAssistantMessage(conversationId, payload.message_id ?? null, payload.run_id)
       if (!target) {
-        runtime.activeAssistantMessageId = payload.message_id ?? `assistant-run-${payload.run_id ?? Date.now()}`
+        const temporaryId = payload.message_id ?? `assistant-run-${payload.run_id ?? Date.now()}`
+        runtime.activeAssistantMessageId = temporaryId
         target = {
-          id: runtime.activeAssistantMessageId,
+          id: temporaryId,
           conversation_id: conversationId,
           run_id: payload.run_id ?? currentRunId.value,
           role: 'assistant',
@@ -632,18 +656,24 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       if (payload.output_files) {
         outputFiles.value = payload.output_files
       }
-      sending.value = currentRunId.value !== null && isActiveRunStatus(currentRunStatus.value)
+      if (isActiveRunStatus(currentRunStatus.value)) {
+        markRunActive(conversationId, payload.run_id)
+      } else {
+        markRunInactive(conversationId, payload.run_id)
+      }
       if (sending.value) {
         startRunPolling(conversationId)
       }
-      if (!sending.value) {
-        stopRunPolling(conversationId)
-        const target = findAssistantMessage(conversationId, activeAssistantMessageId.value, currentRunId.value ?? undefined)
+      if (!isActiveRunStatus(currentRunStatus.value)) {
+        const target = findAssistantMessage(conversationId, null, payload.run_id ?? currentRunId.value ?? undefined)
         if (target) {
           target.streaming = false
         }
-        activeAssistantMessageId.value = null
-        if (conversation.value?.id === conversationId) {
+        if (!sending.value) {
+          stopRunPolling(conversationId)
+          activeAssistantMessageId.value = null
+        }
+        if (!sending.value && conversation.value?.id === conversationId) {
           const requestId = activeInitializeRequestId
           await loadHistory(conversationId, requestId)
           if (!isCurrentSocket(nextSocket, conversationId)) {
@@ -664,15 +694,17 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       if (payload.output_files) {
         outputFiles.value = payload.output_files
       }
-      const target = findAssistantMessage(conversationId, activeAssistantMessageId.value, payload.run_id)
+      const target = findAssistantMessage(conversationId, payload.message_id, payload.run_id)
       if (target) {
         target.id = payload.message_id
         target.streaming = false
       }
-      activeAssistantMessageId.value = null
-      sending.value = false
-      stopRunPolling(conversationId)
-      if (conversation.value?.id === conversationId) {
+      markRunInactive(conversationId, payload.run_id)
+      if (!sending.value) {
+        activeAssistantMessageId.value = null
+        stopRunPolling(conversationId)
+      }
+      if (!sending.value && conversation.value?.id === conversationId) {
         const requestId = activeInitializeRequestId
         await loadHistory(conversationId, requestId)
         if (!isCurrentSocket(nextSocket, conversationId)) {
@@ -710,15 +742,22 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
     }
     errorMessage.value = payload.message
     ElMessage.error(payload.message)
-    const target = findAssistantMessage(conversationId, activeAssistantMessageId.value, currentRunId.value ?? undefined)
+    const errorRunId = payload.run_id ?? currentRunId.value ?? undefined
+    const target = findAssistantMessage(conversationId, null, errorRunId)
     if (target) {
       target.streaming = false
     }
-    activeAssistantMessageId.value = null
-    if (currentRunId.value) {
-      void reconcileCurrentRun(conversationId)
-    } else {
+    if (payload.run_id !== undefined) {
+      markRunInactive(conversationId, payload.run_id)
+    } else if (activeRuntime.value.activeRunIds.length === 0) {
       sending.value = false
+    }
+    if (!sending.value) {
+      activeAssistantMessageId.value = null
+    }
+    if (payload.run_id !== undefined) {
+      void reconcileCurrentRun(conversationId)
+    } else if (!sending.value) {
       currentClientMessageId.value = null
       currentRunStatus.value = ''
     }
@@ -950,10 +989,6 @@ async function selectConversation(nextConversation: Conversation) {
 }
 
 async function sendMessage(content: string, fileIds: number[]) {
-  if (sending.value || hasBlockingActiveRun()) {
-    ElMessage.warning('当前会话已有任务正在运行')
-    return
-  }
   if (
     !socket ||
     socket.readyState !== WebSocket.OPEN ||

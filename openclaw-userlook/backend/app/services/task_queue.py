@@ -25,8 +25,7 @@ class ActiveDispatcher:
 
 class TaskQueueRegistry:
     def __init__(self) -> None:
-        self._conversation_queues: dict[int, asyncio.Task[None]] = {}
-        self._active_dispatchers: dict[int, ActiveDispatcher] = {}
+        self._active_dispatchers: dict[int, dict[int, ActiveDispatcher]] = {}
         self._run_dispatchers: dict[int, ActiveDispatcher] = {}
         self._global_chat_semaphore: asyncio.Semaphore | None = None
         self._global_chat_limit: int | None = None
@@ -43,29 +42,44 @@ class TaskQueueRegistry:
             self._global_chat_limit = limit
         return self._global_chat_semaphore
 
+    def active_task_count(self, conversation_id: int) -> int:
+        return sum(
+            1
+            for dispatcher in self._active_dispatchers.get(conversation_id, {}).values()
+            if not dispatcher.task.done()
+        )
+
     def has_active_task(self, conversation_id: int) -> bool:
-        dispatcher = self._active_dispatchers.get(conversation_id)
-        return dispatcher is not None and not dispatcher.task.done()
+        return self.active_task_count(conversation_id) > 0
 
     def register_active_dispatcher(
         self,
         conversation_id: int,
         dispatcher: ActiveDispatcher,
     ) -> None:
-        self._active_dispatchers[conversation_id] = dispatcher
+        self._active_dispatchers.setdefault(conversation_id, {})[dispatcher.run_id] = dispatcher
         self._run_dispatchers[dispatcher.run_id] = dispatcher
 
     def unregister_active_dispatcher(self, conversation_id: int, run_id: int) -> None:
-        dispatcher = self._active_dispatchers.get(conversation_id)
-        if dispatcher is not None and dispatcher.run_id == run_id:
-            self._active_dispatchers.pop(conversation_id, None)
+        dispatchers = self._active_dispatchers.get(conversation_id)
+        if dispatchers is not None:
+            dispatchers.pop(run_id, None)
+            if not dispatchers:
+                self._active_dispatchers.pop(conversation_id, None)
         self._run_dispatchers.pop(run_id, None)
 
     def get_active_dispatcher(self, conversation_id: int) -> ActiveDispatcher | None:
-        dispatcher = self._active_dispatchers.get(conversation_id)
-        if dispatcher is None or dispatcher.task.done():
-            return None
-        return dispatcher
+        for dispatcher in self._active_dispatchers.get(conversation_id, {}).values():
+            if not dispatcher.task.done():
+                return dispatcher
+        return None
+
+    def get_active_dispatchers(self, conversation_id: int) -> list[ActiveDispatcher]:
+        return [
+            dispatcher
+            for dispatcher in self._active_dispatchers.get(conversation_id, {}).values()
+            if not dispatcher.task.done()
+        ]
 
     def get_dispatcher_for_run(self, run_id: int) -> ActiveDispatcher | None:
         dispatcher = self._run_dispatchers.get(run_id)
@@ -79,10 +93,13 @@ class TaskQueueRegistry:
             dispatcher.abort = abort
 
     def cancel_conversation_task(self, conversation_id: int) -> bool:
-        dispatcher = self.get_active_dispatcher(conversation_id)
-        if dispatcher is None:
+        dispatchers = self.get_active_dispatchers(conversation_id)
+        if not dispatchers:
             return False
-        return self._cancel_dispatcher(dispatcher)
+        cancelled = False
+        for dispatcher in dispatchers:
+            cancelled = self._cancel_dispatcher(dispatcher) or cancelled
+        return cancelled
 
     def cancel_task(self, run_id: int) -> bool:
         dispatcher = self.get_dispatcher_for_run(run_id)
@@ -111,16 +128,9 @@ class TaskQueueRegistry:
         task_func: TaskFunc,
     ) -> QueueStatus:
         async with self._lock:
-            previous_task = self._conversation_queues.get(conversation_id)
-            queue_status: QueueStatus = (
-                "queued" if previous_task is not None and not previous_task.done() else "immediate"
-            )
             cancel_event = asyncio.Event()
 
             async def runner() -> None:
-                if previous_task is not None and not previous_task.done():
-                    with contextlib.suppress(BaseException):
-                        await previous_task
                 if cancel_event.is_set():
                     return
                 semaphore = self.get_chat_semaphore()
@@ -137,7 +147,6 @@ class TaskQueueRegistry:
                 cancel_event=cancel_event,
             )
             self.register_active_dispatcher(conversation_id, dispatcher)
-            self._conversation_queues[conversation_id] = task
             task.add_done_callback(
                 lambda done_task, cid=conversation_id, rid=run_id: self._cleanup_done_task(
                     cid,
@@ -145,7 +154,7 @@ class TaskQueueRegistry:
                     done_task,
                 )
             )
-            return queue_status
+            return "immediate"
 
     def _cleanup_done_task(
         self,
@@ -153,12 +162,10 @@ class TaskQueueRegistry:
         run_id: int,
         done_task: asyncio.Task[None],
     ) -> None:
-        if self._conversation_queues.get(conversation_id) is done_task:
-            self._conversation_queues.pop(conversation_id, None)
         self.unregister_active_dispatcher(conversation_id, run_id)
 
     async def shutdown(self) -> None:
-        tasks = list({*self._conversation_queues.values(), *(d.task for d in self._run_dispatchers.values())})
+        tasks = list({dispatcher.task for dispatcher in self._run_dispatchers.values()})
         for dispatcher in list(self._run_dispatchers.values()):
             dispatcher.cancel_event.set()
             if dispatcher.abort is not None:
@@ -172,7 +179,6 @@ class TaskQueueRegistry:
         for task in tasks:
             with contextlib.suppress(BaseException):
                 await task
-        self._conversation_queues.clear()
         self._active_dispatchers.clear()
         self._run_dispatchers.clear()
 

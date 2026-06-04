@@ -34,7 +34,7 @@ const emit = defineEmits<{
 const draft = ref('')
 const scrollRef = ref<HTMLElement | null>(null)
 
-const canSend = computed(() => props.connected && !props.sending && draft.value.trim().length > 0)
+const canSend = computed(() => props.connected && draft.value.trim().length > 0)
 const canStop = computed(() => ['pending', 'queued', 'running', 'stale'].includes(props.runStatus))
 
 function send() {
@@ -129,7 +129,7 @@ watch(
         maxlength="2000"
         show-word-limit
         placeholder="输入消息，Enter 发送，Shift + Enter 换行"
-        :disabled="!connected || sending"
+        :disabled="!connected"
         @keydown.enter.exact.prevent="send"
       />
       <div class="composer-actions">
@@ -141,7 +141,6 @@ watch(
           type="primary"
           :icon="Promotion"
           :disabled="!canSend"
-          :loading="sending"
           @click="send"
         >
           发送
