@@ -7,6 +7,7 @@ export interface UserFile {
   user_id: number
   original_name: string
   file_type: string
+  mime_type?: string | null
   file_size: number
   purpose: FilePurpose
   created_at: string
@@ -15,6 +16,7 @@ export interface UserFile {
 
 export interface FileUploadResponse {
   file_id: number
+  id?: number
   file: UserFile
 }
 

@@ -5,7 +5,7 @@ from app.core.database import get_db
 from app.models.task_run import TaskRunStatus
 from app.models.user import User
 from app.schemas.run import BatchDeleteRunsRequest, BatchDeleteRunsResponse, TaskRunRead
-from app.services.auth_service import get_current_user
+from app.services.auth_service import get_current_user, require_admin
 from app.services.run_service import (
     batch_delete_task_runs,
     delete_task_run,
@@ -63,7 +63,7 @@ def cancel_run(
 def delete_run(
     run_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ) -> None:
     delete_task_run(db, current_user, run_id)
 
@@ -72,6 +72,6 @@ def delete_run(
 def batch_delete_runs(
     payload: BatchDeleteRunsRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ) -> BatchDeleteRunsResponse:
     return BatchDeleteRunsResponse(**batch_delete_task_runs(db, current_user, payload.run_ids))

@@ -10,6 +10,7 @@ class FileRead(BaseModel):
     user_id: int
     original_name: str
     file_type: str
+    mime_type: str | None = None
     file_size: int
     purpose: FilePurpose
     created_at: datetime

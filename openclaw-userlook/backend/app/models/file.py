@@ -28,6 +28,7 @@ class File(Base):
     original_name: Mapped[str] = mapped_column(String(255), nullable=False)
     stored_path: Mapped[str] = mapped_column(String(500), nullable=False)
     file_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     purpose: Mapped[FilePurpose] = mapped_column(
         SQLEnum(
