@@ -1,15 +1,27 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Download, Refresh } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { Delete, Download, Refresh } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { fetchAgents, type Agent } from '../api/agents'
 import { downloadFile, formatFileSize } from '../api/files'
-import { fetchRuns, type TaskRun, type TaskRunStatus } from '../api/runs'
+import {
+  batchDeleteRuns,
+  deleteRun,
+  fetchRuns,
+  isTerminalRunStatus,
+  type TaskRun,
+  type TaskRunStatus,
+} from '../api/runs'
+import BatchDeleteToolbar from '../components/BatchDeleteToolbar.vue'
+import { elapsedBetween, formatDateTimeShanghai, parseBackendTime } from '../utils/time'
 
 const loading = ref(false)
+const deleting = ref(false)
 const runs = ref<TaskRun[]>([])
 const agents = ref<Agent[]>([])
+const selectedRuns = ref<TaskRun[]>([])
+const tableRef = ref()
 const filters = ref<{
   status: TaskRunStatus | ''
   agent_id: number | undefined
@@ -46,6 +58,7 @@ async function loadRuns() {
       run_type: filters.value.run_type || undefined,
       active_only: filters.value.active_only,
     })
+    selectedRuns.value = []
   } catch {
     ElMessage.error('任务列表加载失败')
   } finally {
@@ -60,19 +73,10 @@ function statusType(status: TaskRun['status']) {
   if (status === 'failed' || status === 'timeout' || status === 'stale') {
     return 'danger'
   }
-  if (status === 'running') {
+  if (status === 'running' || status === 'queued' || status === 'pending') {
     return 'warning'
   }
   return 'info'
-}
-
-function parseBackendTime(value: string | null | undefined) {
-  if (!value) {
-    return null
-  }
-  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value)
-  const timestamp = Date.parse(hasTimezone ? value : `${value}Z`)
-  return Number.isNaN(timestamp) ? null : timestamp
 }
 
 function isRunWarning(row: TaskRun) {
@@ -84,33 +88,6 @@ function isRunWarning(row: TaskRun) {
     return false
   }
   return Date.now() - heartbeat > 5 * 60 * 1000
-}
-
-function formatDurationMs(ms: number | null) {
-  if (ms === null || ms < 0) {
-    return '-'
-  }
-  const seconds = Math.round(ms / 1000)
-  if (seconds < 60) {
-    return `${seconds}s`
-  }
-  const minutes = Math.floor(seconds / 60)
-  const restSeconds = seconds % 60
-  if (minutes < 60) {
-    return `${minutes}m ${restSeconds}s`
-  }
-  const hours = Math.floor(minutes / 60)
-  const restMinutes = minutes % 60
-  return `${hours}h ${restMinutes}m`
-}
-
-function elapsedBetween(start: string | null | undefined, end: string | null | undefined) {
-  const startTime = parseBackendTime(start)
-  const endTime = parseBackendTime(end)
-  if (startTime === null || endTime === null) {
-    return '-'
-  }
-  return formatDurationMs(endTime - startTime)
 }
 
 function queueDuration(row: TaskRun) {
@@ -129,6 +106,75 @@ function resetFilters() {
     active_only: false,
   }
   void loadRuns()
+}
+
+function onSelectionChange(rows: TaskRun[]) {
+  selectedRuns.value = rows
+}
+
+function clearSelection() {
+  tableRef.value?.clearSelection()
+  selectedRuns.value = []
+}
+
+async function confirmDeleteRun(row: TaskRun) {
+  if (!isTerminalRunStatus(row.status)) {
+    ElMessage.warning('运行中任务不能删除，请先取消或等待结束')
+    return
+  }
+  try {
+    await ElMessageBox.confirm('确认删除该历史任务？', '删除任务', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+    })
+  } catch {
+    return
+  }
+
+  deleting.value = true
+  try {
+    await deleteRun(row.id)
+    ElMessage.success('任务已删除')
+    await loadRuns()
+  } catch {
+    ElMessage.error('任务删除失败')
+  } finally {
+    deleting.value = false
+  }
+}
+
+async function confirmBatchDelete() {
+  if (selectedRuns.value.some((run) => !isTerminalRunStatus(run.status))) {
+    ElMessage.warning('运行中任务不能删除，请先取消或等待结束')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`确认删除选中的 ${selectedRuns.value.length} 个历史任务？`, '批量删除任务', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+    })
+  } catch {
+    return
+  }
+
+  deleting.value = true
+  try {
+    const result = await batchDeleteRuns(selectedRuns.value.map((run) => run.id))
+    if (result.skipped.length > 0) {
+      ElMessage.warning(`已删除 ${result.deleted_ids.length} 个任务，跳过 ${result.skipped.length} 个`)
+    } else {
+      ElMessage.success(`已删除 ${result.deleted_ids.length} 个任务`)
+    }
+    await loadRuns()
+  } catch {
+    ElMessage.error('批量删除任务失败')
+  } finally {
+    deleting.value = false
+  }
 }
 
 onMounted(async () => {
@@ -175,9 +221,24 @@ onMounted(async () => {
         </el-select>
         <el-checkbox v-model="filters.active_only" @change="loadRuns">仅 active</el-checkbox>
       </div>
-      <el-table v-loading="loading" :data="runs" row-key="id">
+
+      <BatchDeleteToolbar
+        :selected-count="selectedRuns.length"
+        :loading="deleting"
+        @delete-selected="confirmBatchDelete"
+        @clear-selection="clearSelection"
+      />
+
+      <el-table
+        ref="tableRef"
+        v-loading="loading"
+        :data="runs"
+        row-key="id"
+        @selection-change="onSelectionChange"
+      >
+        <el-table-column type="selection" width="48" />
         <el-table-column type="expand">
-          <template #default="{ row }">
+          <template #default="{ row }: { row: TaskRun }">
             <div class="run-detail">
               <div>
                 <strong>输入</strong>
@@ -208,7 +269,7 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column prop="id" label="Run ID" width="96" />
         <el-table-column label="status" width="120">
-          <template #default="{ row }">
+          <template #default="{ row }: { row: TaskRun }">
             <el-tag :type="statusType(row.status)" effect="plain">{{ row.status }}</el-tag>
             <el-tag v-if="isRunWarning(row)" class="warning-tag" type="danger" effect="plain">
               heartbeat 过旧
@@ -218,35 +279,45 @@ onMounted(async () => {
         <el-table-column prop="run_type" label="run_type" width="110" />
         <el-table-column prop="priority" label="priority" width="100" />
         <el-table-column label="agent" min-width="170">
-          <template #default="{ row }">
+          <template #default="{ row }: { row: TaskRun }">
             {{ row.agent_name || row.agent_code || row.agent_id }}
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="created_at" min-width="180" />
-        <el-table-column prop="queued_at" label="queued_at" min-width="180" />
-        <el-table-column prop="started_at" label="started_at" min-width="180" />
+        <el-table-column label="created_at" min-width="180">
+          <template #default="{ row }: { row: TaskRun }">{{ formatDateTimeShanghai(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column label="queued_at" min-width="180">
+          <template #default="{ row }: { row: TaskRun }">{{ formatDateTimeShanghai(row.queued_at) }}</template>
+        </el-table-column>
+        <el-table-column label="started_at" min-width="180">
+          <template #default="{ row }: { row: TaskRun }">{{ formatDateTimeShanghai(row.started_at) }}</template>
+        </el-table-column>
         <el-table-column label="排队耗时" width="110">
-          <template #default="{ row }">
+          <template #default="{ row }: { row: TaskRun }">
             {{ queueDuration(row) }}
           </template>
         </el-table-column>
         <el-table-column label="执行耗时" width="110">
-          <template #default="{ row }">
+          <template #default="{ row }: { row: TaskRun }">
             {{ runDuration(row) }}
           </template>
         </el-table-column>
-        <el-table-column prop="heartbeat_at" label="heartbeat_at" min-width="180" />
-        <el-table-column prop="finished_at" label="finished_at" min-width="180" />
+        <el-table-column label="heartbeat_at" min-width="180">
+          <template #default="{ row }: { row: TaskRun }">{{ formatDateTimeShanghai(row.heartbeat_at) }}</template>
+        </el-table-column>
+        <el-table-column label="finished_at" min-width="180">
+          <template #default="{ row }: { row: TaskRun }">{{ formatDateTimeShanghai(row.finished_at) }}</template>
+        </el-table-column>
         <el-table-column prop="timeout_seconds" label="timeout" width="100" />
         <el-table-column label="cancel" width="96">
-          <template #default="{ row }">
+          <template #default="{ row }: { row: TaskRun }">
             <el-tag :type="row.cancel_requested ? 'warning' : 'info'" effect="plain">
               {{ row.cancel_requested ? 'yes' : 'no' }}
             </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="output_files" min-width="220">
-          <template #default="{ row }">
+          <template #default="{ row }: { row: TaskRun }">
             <div class="output-files">
               <el-button
                 v-for="file in row.output_files"
@@ -260,6 +331,23 @@ onMounted(async () => {
               </el-button>
               <span v-if="row.output_files.length === 0">-</span>
             </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="110" fixed="right">
+          <template #default="{ row }: { row: TaskRun }">
+            <el-tooltip :content="isTerminalRunStatus(row.status) ? '删除历史任务' : '运行中任务不能删除'">
+              <span>
+                <el-button
+                  link
+                  type="danger"
+                  :icon="Delete"
+                  :disabled="!isTerminalRunStatus(row.status)"
+                  @click="confirmDeleteRun(row)"
+                >
+                  删除
+                </el-button>
+              </span>
+            </el-tooltip>
           </template>
         </el-table-column>
       </el-table>

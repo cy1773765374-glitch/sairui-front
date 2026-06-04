@@ -18,6 +18,16 @@ export interface FileUploadResponse {
   file: UserFile
 }
 
+export interface DeleteSkippedItem {
+  id: number
+  reason: string
+}
+
+export interface BatchDeleteFilesResponse {
+  deleted_ids: number[]
+  skipped: DeleteSkippedItem[]
+}
+
 export async function fetchFiles(): Promise<UserFile[]> {
   const response = await apiClient.get<UserFile[]>('/api/files')
   return response.data
@@ -46,6 +56,17 @@ export async function downloadFile(file: UserFile): Promise<void> {
   link.click()
   link.remove()
   URL.revokeObjectURL(url)
+}
+
+export async function deleteFile(fileId: number): Promise<void> {
+  await apiClient.delete(`/api/files/${fileId}`)
+}
+
+export async function batchDeleteFiles(fileIds: number[]): Promise<BatchDeleteFilesResponse> {
+  const response = await apiClient.post<BatchDeleteFilesResponse>('/api/files/batch-delete', {
+    file_ids: fileIds,
+  })
+  return response.data
 }
 
 export function formatFileSize(size: number): string {
