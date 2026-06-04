@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { ChatDotRound, Files, Picture } from '@element-plus/icons-vue'
+import { ChatDotRound, Files, Picture, Star, StarFilled } from '@element-plus/icons-vue'
 
 import type { Agent, AgentRiskLevel } from '../api/agents'
 
 defineProps<{
   agent: Agent
+  favorited?: boolean
 }>()
 
 defineEmits<{
   'open-chat': [agent: Agent]
+  'toggle-favorite': [agent: Agent]
 }>()
 
 function riskTagType(riskLevel: AgentRiskLevel) {
@@ -61,6 +63,14 @@ function riskTagType(riskLevel: AgentRiskLevel) {
       />
 
       <div class="agent-card__actions">
+        <el-button
+          :icon="favorited ? StarFilled : Star"
+          :type="favorited ? 'warning' : 'default'"
+          plain
+          @click="$emit('toggle-favorite', agent)"
+        >
+          {{ favorited ? '已收藏' : '加入常用' }}
+        </el-button>
         <el-button type="primary" :icon="ChatDotRound" @click="$emit('open-chat', agent)">
           进入对话
         </el-button>

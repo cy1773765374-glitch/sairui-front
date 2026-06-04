@@ -56,7 +56,7 @@ function logout() {
       >
         <el-menu-item index="/">
           <el-icon><House /></el-icon>
-          <span>Dashboard</span>
+          <span>首页</span>
         </el-menu-item>
         <el-menu-item index="/agents">
           <el-icon><Collection /></el-icon>
@@ -87,7 +87,7 @@ function logout() {
 
     <el-container class="workbench-main">
       <el-header class="workbench-header" height="64px">
-        <div class="header-title">企业内部 OpenClaw 多 Agent 工作台</div>
+        <div class="header-title">赛锐Agent</div>
         <div class="header-user">
           <el-tag :type="authStore.isAdmin ? 'warning' : 'info'" effect="plain">
             {{ authStore.user?.role ?? 'user' }}
