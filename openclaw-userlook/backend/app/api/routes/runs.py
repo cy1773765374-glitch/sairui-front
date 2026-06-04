@@ -1,12 +1,18 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.task_run import TaskRunStatus
 from app.models.user import User
-from app.schemas.run import TaskRunRead
+from app.schemas.run import BatchDeleteRunsRequest, BatchDeleteRunsResponse, TaskRunRead
 from app.services.auth_service import get_current_user
-from app.services.run_service import get_task_run_detail, list_task_runs, request_task_run_cancel
+from app.services.run_service import (
+    batch_delete_task_runs,
+    delete_task_run,
+    get_task_run_detail,
+    list_task_runs,
+    request_task_run_cancel,
+)
 from app.services.task_queue import task_queue
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -51,3 +57,21 @@ def cancel_run(
     run = request_task_run_cancel(db, current_user, run_id)
     task_queue.cancel_task(run.id)
     return get_task_run_detail(db, current_user, run.id)
+
+
+@router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_run(
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    delete_task_run(db, current_user, run_id)
+
+
+@router.post("/batch-delete", response_model=BatchDeleteRunsResponse)
+def batch_delete_runs(
+    payload: BatchDeleteRunsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> BatchDeleteRunsResponse:
+    return BatchDeleteRunsResponse(**batch_delete_task_runs(db, current_user, payload.run_ids))

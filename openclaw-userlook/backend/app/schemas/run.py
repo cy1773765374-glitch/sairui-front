@@ -37,3 +37,17 @@ class TaskRunRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     output_files: list[FileRead] = []
+
+
+class BatchDeleteRunsRequest(BaseModel):
+    run_ids: list[int]
+
+
+class DeleteSkippedItem(BaseModel):
+    id: int
+    reason: str
+
+
+class BatchDeleteRunsResponse(BaseModel):
+    deleted_ids: list[int]
+    skipped: list[DeleteSkippedItem]

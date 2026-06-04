@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -68,6 +68,10 @@ def _resolve_root(root: str) -> Path:
     return Path(root).expanduser().resolve()
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _is_relative_to(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
@@ -110,7 +114,7 @@ def file_to_read(file: File) -> FileRead:
 
 
 def list_files(db: Session, current_user: User) -> list[FileRead]:
-    statement = select(File).order_by(File.created_at.desc(), File.id.desc())
+    statement = select(File).where(File.deleted_at.is_(None)).order_by(File.created_at.desc(), File.id.desc())
     if current_user.role != UserRole.admin:
         statement = statement.where(File.user_id == current_user.id)
     return [file_to_read(file) for file in db.scalars(statement)]
@@ -127,6 +131,7 @@ def validate_user_upload_file_ids(db: Session, current_user: User, file_ids: lis
                 File.id.in_(unique_file_ids),
                 File.user_id == current_user.id,
                 File.purpose == FilePurpose.upload,
+                File.deleted_at.is_(None),
             )
         )
     )
@@ -150,6 +155,7 @@ def list_gateway_upload_files(db: Session, current_user: User, file_ids: list[in
                 File.id.in_(unique_file_ids),
                 File.user_id == current_user.id,
                 File.purpose == FilePurpose.upload,
+                File.deleted_at.is_(None),
             )
         )
     )
@@ -235,7 +241,7 @@ async def save_upload_file(db: Session, current_user: User, upload: UploadFile) 
 
 def get_downloadable_file(db: Session, current_user: User, file_id: int) -> tuple[File, Path]:
     file = db.get(File, file_id)
-    if file is None:
+    if file is None or file.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
 
     if current_user.role != UserRole.admin and file.user_id != current_user.id:
@@ -254,6 +260,39 @@ def get_downloadable_file(db: Session, current_user: User, file_id: int) -> tupl
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
 
     return file, stored_path
+
+
+def delete_file(db: Session, current_user: User, file_id: int) -> None:
+    file = db.get(File, file_id)
+    if file is None or file.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
+    if current_user.role != UserRole.admin and file.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
+    if file.purpose not in {FilePurpose.upload, FilePurpose.output}:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
+    file.deleted_at = _utc_now()
+    db.commit()
+
+
+def batch_delete_files(db: Session, current_user: User, file_ids: list[int]) -> dict[str, list[object]]:
+    deleted_ids: list[int] = []
+    skipped: list[dict[str, object]] = []
+    for file_id in list(dict.fromkeys(file_ids)):
+        file = db.get(File, file_id)
+        if file is None or file.deleted_at is not None:
+            skipped.append({"id": file_id, "reason": "not_found"})
+            continue
+        if current_user.role != UserRole.admin and file.user_id != current_user.id:
+            skipped.append({"id": file_id, "reason": "not_found"})
+            continue
+        if file.purpose not in {FilePurpose.upload, FilePurpose.output}:
+            skipped.append({"id": file_id, "reason": "unsupported_purpose"})
+            continue
+        file.deleted_at = _utc_now()
+        deleted_ids.append(file.id)
+    if deleted_ids:
+        db.commit()
+    return {"deleted_ids": deleted_ids, "skipped": skipped}
 
 
 def build_run_output_dir(user_id: int, run_id: int) -> str:
@@ -331,6 +370,7 @@ def list_output_files_for_dir(db: Session, user_id: int, output_dir: str | None)
         .where(
             File.user_id == user_id,
             File.purpose == FilePurpose.output,
+            File.deleted_at.is_(None),
         )
         .order_by(File.created_at.desc(), File.id.desc())
     )
