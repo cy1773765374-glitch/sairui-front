@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ChatDotRound, Collection, DataBoard, Refresh, TrendCharts } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowRight, ChatDotRound, Collection, DataBoard, Refresh, TrendCharts } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
 import { fetchAgents, type Agent } from '../api/agents'
@@ -25,10 +25,11 @@ const agents = ref<Agent[]>([])
 const runs = ref<TaskRun[]>([])
 const conversations = ref<Conversation[]>([])
 const favorites = ref<FavoriteAgent[]>([])
+const recentRunsExpanded = ref(false)
+const recentConversationsExpanded = ref(false)
 
 const recentRuns = computed(() => runs.value.slice(0, 5))
 const recentConversations = computed(() => conversations.value.slice(0, 5))
-const highRiskCount = computed(() => agents.value.filter((agent) => agent.risk_level === 'high').length)
 const runningCount = computed(() =>
   runs.value.filter((run) => run.status === 'running' || run.status === 'pending' || run.status === 'queued').length,
 )
@@ -102,11 +103,8 @@ onMounted(loadDashboard)
   <section class="dashboard-page page-stack">
     <header class="page-heading">
       <div>
-        <p class="eyebrow">首页</p>
-        <h1>赛锐Agent</h1>
-        <p>查看系统状态、常用 Agent、最近任务和最近会话。</p>
+        <h1>首页</h1>
       </div>
-      <el-button :icon="Refresh" :loading="loading" @click="loadDashboard">刷新</el-button>
     </header>
 
     <section class="metric-grid">
@@ -120,7 +118,7 @@ onMounted(loadDashboard)
         <el-icon><Collection /></el-icon>
         <span>可用 Agent</span>
         <strong>{{ agents.length }}</strong>
-        <small>{{ highRiskCount }} 个高风险</small>
+        <small>Agent 广场可用</small>
       </el-card>
       <el-card class="metric-card" shadow="never">
         <el-icon><DataBoard /></el-icon>
@@ -136,50 +134,53 @@ onMounted(loadDashboard)
       </el-card>
     </section>
 
-    <el-row :gutter="16">
-      <el-col :xs="24" :lg="10">
-        <FavoriteAgentsPanel
-          :favorites="favorites"
-          :loading="loading"
-          @open-chat="openAgentChat"
-          @remove-favorite="removeFavorite"
-          @reorder="reorderFavorites"
-        />
-      </el-col>
+    <FavoriteAgentsPanel
+      :favorites="favorites"
+      :loading="loading"
+      @open-chat="openAgentChat"
+      @remove-favorite="removeFavorite"
+      @reorder="reorderFavorites"
+    />
 
-      <el-col :xs="24" :lg="14">
-        <el-card class="panel-card" shadow="never">
-          <template #header>
-            <div class="card-header">
-              <span>最近任务</span>
-              <el-button link type="primary" @click="router.push({ name: 'runs' })">查看全部</el-button>
-            </div>
-          </template>
-          <el-table v-loading="loading" :data="recentRuns" size="small">
-            <el-table-column label="状态" width="96">
-              <template #default="{ row }: { row: TaskRun }">
-                <el-tag :type="statusType(row.status)" effect="plain">{{ row.status }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="Agent" min-width="140">
-              <template #default="{ row }: { row: TaskRun }">{{ row.agent_name || row.agent_code || row.agent_id }}</template>
-            </el-table-column>
-            <el-table-column label="创建时间" min-width="170">
-              <template #default="{ row }: { row: TaskRun }">{{ formatDateTimeShanghai(row.created_at) }}</template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <el-card class="panel-card" shadow="never">
+    <el-card class="panel-card collapsible-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>最近会话</span>
-          <el-button link type="primary" @click="router.push({ name: 'agents' })">进入 Agent 广场</el-button>
+          <button class="section-toggle" type="button" @click="recentRunsExpanded = !recentRunsExpanded">
+            <el-icon><component :is="recentRunsExpanded ? ArrowDown : ArrowRight" /></el-icon>
+            <span>最近任务</span>
+          </button>
+          <el-button link type="primary" @click="router.push({ name: 'runs' })">查看全部</el-button>
         </div>
       </template>
-      <el-table v-loading="loading" :data="recentConversations" size="small">
+      <el-table v-if="recentRunsExpanded" v-loading="loading" :data="recentRuns" size="small">
+        <el-table-column label="状态" width="96">
+          <template #default="{ row }: { row: TaskRun }">
+            <el-tag :type="statusType(row.status)" effect="plain">{{ row.status }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="Agent" min-width="140">
+          <template #default="{ row }: { row: TaskRun }">{{ row.agent_name || row.agent_code || row.agent_id }}</template>
+        </el-table-column>
+        <el-table-column label="创建时间" min-width="170">
+          <template #default="{ row }: { row: TaskRun }">{{ formatDateTimeShanghai(row.created_at) }}</template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <el-card class="panel-card collapsible-card" shadow="never">
+      <template #header>
+        <div class="card-header">
+          <button class="section-toggle" type="button" @click="recentConversationsExpanded = !recentConversationsExpanded">
+            <el-icon><component :is="recentConversationsExpanded ? ArrowDown : ArrowRight" /></el-icon>
+            <span>最近会话</span>
+          </button>
+          <div class="card-actions">
+            <el-button link type="primary" :icon="Refresh" :loading="loading" @click="loadDashboard">刷新</el-button>
+            <el-button link type="primary" @click="router.push({ name: 'agents' })">进入 Agent 广场</el-button>
+          </div>
+        </div>
+      </template>
+      <el-table v-if="recentConversationsExpanded" v-loading="loading" :data="recentConversations" size="small">
         <el-table-column prop="title" label="会话" min-width="220" />
         <el-table-column prop="agent_name" label="Agent" min-width="160" />
         <el-table-column label="更新时间" min-width="180">
@@ -200,7 +201,7 @@ onMounted(loadDashboard)
 <style scoped>
 .page-stack {
   display: grid;
-  gap: 16px;
+  gap: 14px;
 }
 
 .page-heading,
@@ -211,26 +212,14 @@ onMounted(loadDashboard)
   gap: 16px;
 }
 
-.eyebrow {
-  margin: 0 0 6px;
-  color: #1a73e8;
-  font-size: 13px;
-  font-weight: 700;
-}
-
 h1,
 p {
   margin: 0;
 }
 
 h1 {
-  font-size: 26px;
+  font-size: 22px;
   line-height: 1.25;
-}
-
-.page-heading p:last-child {
-  margin-top: 6px;
-  color: #6f7785;
 }
 
 .metric-grid {
@@ -242,6 +231,10 @@ h1 {
 .metric-card,
 .panel-card {
   border-radius: 8px;
+}
+
+.collapsible-card :deep(.el-card__body:empty) {
+  display: none;
 }
 
 .metric-card :deep(.el-card__body) {
@@ -278,6 +271,28 @@ h1 {
   line-height: 1.1;
 }
 
+.section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #202124;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 @media (max-width: 1100px) {
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -288,6 +303,15 @@ h1 {
   .page-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .card-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .card-actions {
+    justify-content: flex-start;
   }
 
   .metric-grid {

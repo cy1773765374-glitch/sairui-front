@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { Close, Connection, Promotion, VideoPause } from '@element-plus/icons-vue'
+import { Close, Connection, Download, Promotion, VideoPause } from '@element-plus/icons-vue'
 
 import { formatFileSize, type UserFile } from '../api/files'
 import type { TaskRunStatus } from '../api/runs'
@@ -22,6 +22,7 @@ const props = defineProps<{
   runStatusMessage: string
   outputFiles: UserFile[]
   activeRunCount: number
+  canExport?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -30,6 +31,7 @@ const emit = defineEmits<{
   stopRun: [runId: number]
   fileUploaded: [file: UserFile]
   removeFile: [fileId: number]
+  exportConversation: []
 }>()
 
 const draft = ref('')
@@ -67,10 +69,21 @@ watch(
         <h1>{{ title }}</h1>
         <p>{{ subtitle }}</p>
       </div>
-      <el-tag :type="connected ? 'success' : 'danger'" effect="plain">
-        <el-icon><Connection /></el-icon>
-        {{ connected ? '已连接' : '已断开' }}
-      </el-tag>
+      <div class="chat-header__actions">
+        <el-tooltip content="导出对话">
+          <el-button
+            :icon="Download"
+            circle
+            plain
+            :disabled="!canExport"
+            @click="emit('exportConversation')"
+          />
+        </el-tooltip>
+        <el-tag :type="connected ? 'success' : 'danger'" effect="plain">
+          <el-icon><Connection /></el-icon>
+          {{ connected ? '已连接' : '已断开' }}
+        </el-tag>
+      </div>
     </header>
 
     <div ref="scrollRef" class="message-list">
@@ -177,6 +190,13 @@ watch(
   padding: 18px 20px;
   border-bottom: 1px solid #dfe5ee;
   background: #ffffff;
+}
+
+.chat-header__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
 }
 
 h1,

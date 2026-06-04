@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ChatDotRound,
   Collection,
   DataBoard,
+  Expand,
   Files,
+  Fold,
   House,
   Management,
   SwitchButton,
@@ -19,6 +21,10 @@ const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const sidebarCollapsed = ref(localStorage.getItem('sairui:main-sidebar-collapsed') === 'true')
+const isDesktop = ref(true)
+
+let mediaQuery: MediaQueryList | null = null
 
 const activeMenu = computed(() => {
   if (String(route.name ?? '').startsWith('admin-')) {
@@ -31,26 +37,62 @@ const activeMenu = computed(() => {
 })
 
 const isChatRoute = computed(() => route.name === 'agent-chat')
+const effectiveSidebarCollapsed = computed(() => sidebarCollapsed.value && isDesktop.value)
+const sidebarWidth = computed(() => (effectiveSidebarCollapsed.value ? '72px' : '256px'))
 
 function logout() {
   authStore.logout()
   router.push({ name: 'login' })
 }
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  localStorage.setItem('sairui:main-sidebar-collapsed', String(sidebarCollapsed.value))
+}
+
+function syncViewport() {
+  isDesktop.value = mediaQuery?.matches ?? true
+}
+
+onMounted(() => {
+  mediaQuery = window.matchMedia('(min-width: 901px)')
+  syncViewport()
+  mediaQuery.addEventListener('change', syncViewport)
+})
+
+onBeforeUnmount(() => {
+  mediaQuery?.removeEventListener('change', syncViewport)
+})
 </script>
 
 <template>
   <el-container class="workbench-layout">
-    <el-aside class="workbench-sidebar" width="256px">
+    <el-aside
+      class="workbench-sidebar"
+      :class="{ 'workbench-sidebar--collapsed': effectiveSidebarCollapsed }"
+      :width="sidebarWidth"
+    >
       <div class="brand">
         <div class="brand-mark">O</div>
         <div class="brand-copy">
           <strong>{{ appStore.systemName }}</strong>
         </div>
+        <el-tooltip :content="effectiveSidebarCollapsed ? '展开导航' : '收起导航'">
+          <el-button
+            class="sidebar-toggle"
+            :icon="effectiveSidebarCollapsed ? Expand : Fold"
+            circle
+            plain
+            size="small"
+            @click="toggleSidebar"
+          />
+        </el-tooltip>
       </div>
 
       <el-menu
         class="side-menu"
         :default-active="activeMenu"
+        :collapse="effectiveSidebarCollapsed"
         router
         background-color="transparent"
       >
@@ -120,6 +162,8 @@ function logout() {
   padding: 18px 12px;
   border-right: 1px solid #dfe5ee;
   background: #f7f9fc;
+  transition: width 0.18s ease;
+  overflow-x: hidden;
 }
 
 .brand {
@@ -127,6 +171,13 @@ function logout() {
   align-items: center;
   gap: 12px;
   padding: 8px 10px 18px;
+}
+
+.workbench-sidebar--collapsed .brand {
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding-inline: 0;
 }
 
 .brand-mark {
@@ -153,6 +204,19 @@ function logout() {
   white-space: nowrap;
 }
 
+.workbench-sidebar--collapsed .brand-copy {
+  display: none;
+}
+
+.sidebar-toggle {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.workbench-sidebar--collapsed .sidebar-toggle {
+  margin-left: 0;
+}
+
 .brand-copy span {
   color: #6f7785;
   font-size: 12px;
@@ -160,6 +224,10 @@ function logout() {
 
 .side-menu {
   border-right: 0;
+}
+
+.side-menu:not(.el-menu--collapse) {
+  width: 100%;
 }
 
 .side-menu :deep(.el-menu-item) {
@@ -248,6 +316,19 @@ function logout() {
 
   .brand {
     padding-bottom: 8px;
+  }
+
+  .workbench-sidebar--collapsed .brand {
+    flex-direction: row;
+    justify-content: flex-start;
+  }
+
+  .workbench-sidebar--collapsed .brand-copy {
+    display: grid;
+  }
+
+  .workbench-sidebar--collapsed .sidebar-toggle {
+    margin-left: auto;
   }
 
   .side-menu {

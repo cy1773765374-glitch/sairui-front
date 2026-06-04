@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { CopyDocument } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 
 import type { LocalMessage } from '../api/conversations'
 import { formatDateTimeShanghai } from '../utils/time'
@@ -54,6 +56,28 @@ function renderMarkdown(value: string) {
 }
 
 const renderedContent = computed(() => renderMarkdown(props.message.content))
+const canCopy = computed(() => props.message.role === 'assistant' && !props.message.streaming)
+
+async function copyMessageContent() {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(props.message.content)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = props.message.content
+      textarea.style.position = 'fixed'
+      textarea.style.left = '-9999px'
+      document.body.appendChild(textarea)
+      textarea.focus()
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
+    ElMessage.success('已复制')
+  } catch {
+    ElMessage.error('复制失败')
+  }
+}
 </script>
 
 <template>
@@ -61,7 +85,19 @@ const renderedContent = computed(() => renderMarkdown(props.message.content))
     <div class="message-bubble">
       <div class="message-meta">
         <span>{{ message.role === 'user' ? '我' : 'Agent' }}</span>
-        <time>{{ formatDateTimeShanghai(message.created_at) }}</time>
+        <div class="message-meta__actions">
+          <time>{{ formatDateTimeShanghai(message.created_at) }}</time>
+          <el-tooltip v-if="canCopy" content="复制回复">
+            <el-button
+              class="copy-message-button"
+              :icon="CopyDocument"
+              circle
+              plain
+              size="small"
+              @click="copyMessageContent"
+            />
+          </el-tooltip>
+        </div>
       </div>
       <div class="message-content" v-html="renderedContent" />
       <div v-if="message.streaming" class="message-status">
@@ -131,6 +167,18 @@ const renderedContent = computed(() => renderMarkdown(props.message.content))
 
 .message-meta time {
   font-weight: 400;
+}
+
+.message-meta__actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.copy-message-button {
+  width: 24px;
+  height: 24px;
 }
 
 .message-content {

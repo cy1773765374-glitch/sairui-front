@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Delete, Plus } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowRight, Delete, EditPen, Expand, Fold, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 
 import { fetchAgent, fetchAgents, type Agent } from '../api/agents'
@@ -11,6 +11,7 @@ import {
   deleteConversation,
   fetchConversation,
   fetchConversations,
+  updateConversationTitle,
   type Conversation,
   type LocalMessage,
 } from '../api/conversations'
@@ -80,8 +81,16 @@ interface ConversationRuntimeState {
   currentRunStatusMessage: string
 }
 
+interface ConversationAgentGroup {
+  agent_code: string
+  agent_name: string
+  agent_id: number
+  conversations: Conversation[]
+}
+
 const route = useRoute()
 const router = useRouter()
+const CHAT_SIDEBAR_COLLAPSED_KEY = 'sairui:chat-sidebar-collapsed'
 
 const loading = ref(true)
 const connected = ref(false)
@@ -95,6 +104,9 @@ const activeRunByConversation = ref<Record<number, TaskRun | null>>({})
 const errorMessage = ref('')
 const attachedFiles = ref<UserFile[]>([])
 const deletingConversationId = ref<number | null>(null)
+const renamingConversationId = ref<number | null>(null)
+const chatSidebarCollapsed = ref(localStorage.getItem(CHAT_SIDEBAR_COLLAPSED_KEY) === 'true')
+const expandedAgentCodes = ref<string[]>([])
 const runtimeByConversation = ref<Record<number, ConversationRuntimeState>>({})
 const fallbackRuntime = ref<ConversationRuntimeState>(createRuntimeState())
 
@@ -116,12 +128,35 @@ const subtitle = computed(() => {
   return conversation.value.title
 })
 
-const conversationsByAgent = computed(() => {
-  if (!agent.value) {
-    return conversations.value
-  }
-  return conversations.value.filter((item) => item.agent_id === agent.value?.id)
+const conversationGroups = computed<ConversationAgentGroup[]>(() => {
+  const groups = new Map<string, ConversationAgentGroup>()
+  conversations.value.forEach((item) => {
+    const existing = groups.get(item.agent_code)
+    if (existing) {
+      existing.conversations.push(item)
+      return
+    }
+    groups.set(item.agent_code, {
+      agent_code: item.agent_code,
+      agent_name: item.agent_name,
+      agent_id: item.agent_id,
+      conversations: [item],
+    })
+  })
+  return Array.from(groups.values()).sort((left, right) => {
+    if (left.agent_code === agent.value?.code) {
+      return -1
+    }
+    if (right.agent_code === agent.value?.code) {
+      return 1
+    }
+    const leftTime = Date.parse(left.conversations[0]?.updated_at ?? '')
+    const rightTime = Date.parse(right.conversations[0]?.updated_at ?? '')
+    return (Number.isNaN(rightTime) ? 0 : rightTime) - (Number.isNaN(leftTime) ? 0 : leftTime)
+  })
 })
+
+const totalConversationCount = computed(() => conversations.value.length)
 
 const activeRuntime = computed(() => {
   if (!conversation.value) {
@@ -850,12 +885,63 @@ function getDeleteConversationTooltip(nextConversation: Conversation) {
   return isConversationDeleteBlocked(nextConversation) ? '请先停止当前任务' : '删除历史对话'
 }
 
+function toggleChatSidebar() {
+  chatSidebarCollapsed.value = !chatSidebarCollapsed.value
+  localStorage.setItem(CHAT_SIDEBAR_COLLAPSED_KEY, String(chatSidebarCollapsed.value))
+}
+
+function isAgentGroupExpanded(agentCode: string) {
+  return expandedAgentCodes.value.includes(agentCode)
+}
+
+function toggleAgentGroup(agentCode: string) {
+  if (isAgentGroupExpanded(agentCode)) {
+    expandedAgentCodes.value = expandedAgentCodes.value.filter((item) => item !== agentCode)
+    return
+  }
+  expandedAgentCodes.value = [...expandedAgentCodes.value, agentCode]
+}
+
+function ensureAgentGroupExpanded(agentCode: string) {
+  if (!expandedAgentCodes.value.includes(agentCode)) {
+    expandedAgentCodes.value = [...expandedAgentCodes.value, agentCode]
+  }
+}
+
+async function findAgentByCode(agentCode: string) {
+  const cached = agents.value.find((item) => item.code === agentCode)
+  if (cached) {
+    return cached
+  }
+  const fetched = await fetchAgent(agentCode)
+  agents.value = [fetched, ...agents.value.filter((item) => item.code !== fetched.code)]
+  return fetched
+}
+
+function replaceConversationInList(nextConversation: Conversation) {
+  conversations.value = conversations.value.map((item) =>
+    item.id === nextConversation.id ? { ...item, ...nextConversation } : item,
+  )
+  if (conversation.value?.id === nextConversation.id) {
+    conversation.value = { ...conversation.value, ...nextConversation }
+  }
+}
+
 async function createNewConversationForCurrentAgent() {
   if (!agent.value) {
     ElMessage.warning('请先选择 Agent')
     return
   }
   await createNewConversationForAgent(agent.value)
+}
+
+async function createNewConversationForAgentCode(agentCode: string) {
+  try {
+    const nextAgent = await findAgentByCode(agentCode)
+    await createNewConversationForAgent(nextAgent)
+  } catch {
+    ElMessage.error('新建对话失败')
+  }
 }
 
 async function createNewConversationForAgent(nextAgent: Agent) {
@@ -881,6 +967,29 @@ async function createNewConversationForAgent(nextAgent: Agent) {
     ElMessage.error('新建对话失败')
   } finally {
     suppressRouteWatch = false
+  }
+}
+
+async function renameConversation(nextConversation: Conversation) {
+  renamingConversationId.value = nextConversation.id
+  try {
+    const { value } = await ElMessageBox.prompt('请输入新的会话名称', '重命名会话', {
+      inputValue: nextConversation.title,
+      inputPlaceholder: '最多 20 个字符',
+      inputPattern: /\S/,
+      inputErrorMessage: '会话名称不能为空',
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+    })
+    const updated = await updateConversationTitle(nextConversation.id, { title: value })
+    replaceConversationInList(updated)
+    ElMessage.success('会话名称已更新')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      ElMessage.error('重命名会话失败')
+    }
+  } finally {
+    renamingConversationId.value = null
   }
 }
 
@@ -1064,11 +1173,68 @@ function removeAttachedFile(fileId: number) {
   attachedFiles.value = attachedFiles.value.filter((file) => file.id !== fileId)
 }
 
+function sanitizeFilenamePart(value: string) {
+  return value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '').replace(/\s+/g, ' ').trim() || '未命名会话'
+}
+
+function downloadMarkdown(filename: string, content: string) {
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+async function exportCurrentConversation() {
+  if (!conversation.value) {
+    ElMessage.warning('暂无可导出的会话')
+    return
+  }
+  try {
+    const detail = await fetchConversation(conversation.value.id)
+    const exportedAt = formatDateTimeShanghai(new Date().toISOString())
+    const timestamp = exportedAt.replace(/-/g, '').replace(/:/g, '').replace(' ', '-')
+    const safeTitle = sanitizeFilenamePart(detail.title)
+    const filename = `赛锐Agent-${safeTitle}-${timestamp}.md`
+    const lines = [
+      '# 赛锐Agent 对话导出',
+      '',
+      `- Agent：${detail.agent_name}`,
+      `- 会话：${detail.title}`,
+      `- 导出时间：${exportedAt}`,
+      '',
+      '---',
+      '',
+    ]
+    detail.messages.forEach((message) => {
+      const role = message.role === 'user' ? '用户' : message.role === 'assistant' ? 'Agent' : '系统'
+      lines.push(`## ${role} ${formatDateTimeShanghai(message.created_at)}`, '', message.content, '')
+    })
+    downloadMarkdown(filename, lines.join('\n'))
+    ElMessage.success('对话已导出')
+  } catch {
+    ElMessage.error('导出对话失败')
+  }
+}
+
 watch(
   () => [route.params.agentCode, route.query.conversationId],
   ([agentCode, conversationId]) => {
     if (!suppressRouteWatch && agentCode) {
       initializeAgent(String(agentCode), parseConversationId(conversationId))
+    }
+  },
+)
+
+watch(
+  () => agent.value?.code,
+  (agentCode) => {
+    if (agentCode) {
+      ensureAgentGroupExpanded(agentCode)
     }
   },
 )
@@ -1097,9 +1263,15 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="chat-page">
-    <aside class="chat-panel left-panel">
-      <el-card shadow="never">
+  <section class="chat-page" :class="{ 'chat-page--sidebar-collapsed': chatSidebarCollapsed }">
+    <aside class="chat-panel left-panel" :class="{ 'left-panel--collapsed': chatSidebarCollapsed }">
+      <div v-if="chatSidebarCollapsed" class="collapsed-chat-sidebar">
+        <el-tooltip content="展开会话栏">
+          <el-button :icon="Expand" circle plain @click="toggleChatSidebar" />
+        </el-tooltip>
+      </div>
+
+      <el-card v-else shadow="never">
         <template #header>
           <div class="panel-header panel-header--stacked">
             <div>
@@ -1107,8 +1279,8 @@ onBeforeUnmount(() => {
               <small>{{ connected ? '已连接' : '连接中' }}</small>
             </div>
             <div class="panel-header-actions">
-              <el-tag effect="plain">{{ conversationsByAgent.length }}</el-tag>
-              <el-tooltip content="新建对话">
+              <el-tag effect="plain">{{ totalConversationCount }}</el-tag>
+              <el-tooltip content="新建当前 Agent 对话">
                 <el-button
                   class="new-conversation-button"
                   :icon="Plus"
@@ -1119,37 +1291,81 @@ onBeforeUnmount(() => {
                   @click="createNewConversationForCurrentAgent"
                 />
               </el-tooltip>
+              <el-tooltip content="收起会话栏">
+                <el-button :icon="Fold" circle plain size="small" @click="toggleChatSidebar" />
+              </el-tooltip>
             </div>
           </div>
         </template>
-        <div class="conversation-list">
-          <div
-            v-for="item in conversationsByAgent"
-            :key="item.id"
-            class="conversation-row"
-            :class="{ active: item.id === conversation?.id }"
+
+        <div class="agent-group-list">
+          <section
+            v-for="group in conversationGroups"
+            :key="group.agent_code"
+            class="agent-group"
+            :class="{ 'agent-group--current': group.agent_code === agent?.code }"
           >
-            <button class="list-item conversation-item" type="button" @click="selectConversation(item)">
-              <span>{{ item.title }}</span>
-              <small>{{ formatDateTimeShanghai(item.updated_at) }}</small>
-            </button>
-            <el-tooltip :content="getDeleteConversationTooltip(item)">
-              <span class="conversation-delete-wrapper">
+            <header class="agent-group__header">
+              <button class="agent-group__toggle" type="button" @click="toggleAgentGroup(group.agent_code)">
+                <el-icon><component :is="isAgentGroupExpanded(group.agent_code) ? ArrowDown : ArrowRight" /></el-icon>
+                <span>{{ group.agent_name }}</span>
+                <small>{{ group.conversations.length }}</small>
+              </button>
+              <el-tooltip content="新建该 Agent 对话">
                 <el-button
-                  class="delete-conversation-button"
-                  :icon="Delete"
+                  :icon="Plus"
                   circle
                   plain
                   size="small"
-                  type="danger"
-                  :loading="deletingConversationId === item.id"
-                  :disabled="isConversationDeleteBlocked(item) || deletingConversationId === item.id"
-                  @click.stop="deleteHistoryConversation(item)"
+                  @click.stop="createNewConversationForAgentCode(group.agent_code)"
                 />
-              </span>
-            </el-tooltip>
-          </div>
-          <el-empty v-if="conversationsByAgent.length === 0" description="暂无历史会话" />
+              </el-tooltip>
+            </header>
+
+            <div v-show="isAgentGroupExpanded(group.agent_code)" class="conversation-list">
+              <div
+                v-for="item in group.conversations"
+                :key="item.id"
+                class="conversation-row"
+                :class="{ active: item.id === conversation?.id }"
+              >
+                <button class="list-item conversation-item" type="button" @click="selectConversation(item)">
+                  <span>{{ item.title }}</span>
+                  <small>{{ formatDateTimeShanghai(item.updated_at) }}</small>
+                </button>
+                <div class="conversation-actions">
+                  <el-tooltip content="重命名">
+                    <el-button
+                      class="rename-conversation-button"
+                      :icon="EditPen"
+                      circle
+                      plain
+                      size="small"
+                      :loading="renamingConversationId === item.id"
+                      :disabled="renamingConversationId === item.id"
+                      @click.stop="renameConversation(item)"
+                    />
+                  </el-tooltip>
+                  <el-tooltip :content="getDeleteConversationTooltip(item)">
+                    <span class="conversation-delete-wrapper">
+                      <el-button
+                        class="delete-conversation-button"
+                        :icon="Delete"
+                        circle
+                        plain
+                        size="small"
+                        type="danger"
+                        :loading="deletingConversationId === item.id"
+                        :disabled="isConversationDeleteBlocked(item) || deletingConversationId === item.id"
+                        @click.stop="deleteHistoryConversation(item)"
+                      />
+                    </span>
+                  </el-tooltip>
+                </div>
+              </div>
+            </div>
+          </section>
+          <el-empty v-if="conversationGroups.length === 0" description="暂无历史会话" />
         </div>
       </el-card>
     </aside>
@@ -1169,11 +1385,13 @@ onBeforeUnmount(() => {
         :run-status-message="currentRunStatusMessage"
         :output-files="outputFiles"
         :active-run-count="activeRunCount"
+        :can-export="!!conversation"
         @send="sendMessage"
         @stop="stopCurrentRun"
         @stop-run="stopRun"
         @file-uploaded="addUploadedFile"
         @remove-file="removeAttachedFile"
+        @export-conversation="exportCurrentConversation"
       />
     </main>
   </section>
@@ -1193,6 +1411,10 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
+.chat-page--sidebar-collapsed {
+  grid-template-columns: 52px minmax(0, 1fr);
+}
+
 .chat-panel {
   display: grid;
   align-content: start;
@@ -1200,6 +1422,19 @@ onBeforeUnmount(() => {
   max-height: 100%;
   min-height: 0;
   overflow-y: auto;
+}
+
+.left-panel--collapsed {
+  overflow: hidden;
+}
+
+.collapsed-chat-sidebar {
+  display: grid;
+  min-height: 52px;
+  place-items: center;
+  border: 1px solid #dfe5ee;
+  border-radius: 8px;
+  background: #ffffff;
 }
 
 .chat-panel .el-card {
@@ -1239,6 +1474,61 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.agent-group-list {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-group {
+  display: grid;
+  gap: 8px;
+}
+
+.agent-group + .agent-group {
+  padding-top: 12px;
+  border-top: 1px solid #edf1f7;
+}
+
+.agent-group__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-group__toggle {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px;
+  border: 0;
+  background: transparent;
+  color: #3c4043;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.agent-group__toggle span {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-group__toggle small {
+  flex: 0 0 auto;
+  color: #6f7785;
+  font-size: 12px;
+}
+
+.agent-group--current .agent-group__toggle {
+  color: #174ea6;
 }
 
 .conversation-list {
@@ -1304,8 +1594,15 @@ onBeforeUnmount(() => {
 }
 
 .conversation-delete-wrapper,
-.delete-conversation-button {
+.delete-conversation-button,
+.rename-conversation-button {
   flex: 0 0 auto;
+}
+
+.conversation-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .chat-main {
@@ -1322,6 +1619,10 @@ onBeforeUnmount(() => {
   .chat-page {
     grid-template-columns: 260px minmax(0, 1fr);
   }
+
+  .chat-page--sidebar-collapsed {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 820px) {
@@ -1332,9 +1633,21 @@ onBeforeUnmount(() => {
     max-height: 100%;
   }
 
+  .chat-page--sidebar-collapsed {
+    grid-template-columns: 1fr;
+  }
+
   .left-panel {
     max-height: 180px;
     overflow-y: auto;
+  }
+
+  .left-panel--collapsed {
+    max-height: 52px;
+  }
+
+  .collapsed-chat-sidebar {
+    min-height: 44px;
   }
 
   .left-panel :deep(.el-card__header) {
@@ -1346,7 +1659,7 @@ onBeforeUnmount(() => {
   }
 
   .conversation-list {
-    max-height: 96px;
+    max-height: 160px;
     overflow-y: auto;
   }
 

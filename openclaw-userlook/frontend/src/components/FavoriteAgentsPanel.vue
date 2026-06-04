@@ -62,13 +62,21 @@ function onDrop(targetCode: string) {
           <el-icon class="favorite-item__drag"><Rank /></el-icon>
           <span>
             <strong>{{ agent.name }}</strong>
-            <small>{{ agent.description || agent.category || '点击进入对话' }}</small>
+            <small>{{ agent.description || agent.category || '点击进入' }}</small>
           </span>
         </button>
         <div class="favorite-item__actions">
-          <el-button link type="primary" :icon="ChatDotRound" @click="$emit('openChat', agent.agent_code)">
-            对话
-          </el-button>
+          <el-tooltip content="进入对话">
+            <el-button
+              class="favorite-item__open"
+              type="primary"
+              :icon="ChatDotRound"
+              circle
+              plain
+              size="small"
+              @click="$emit('openChat', agent.agent_code)"
+            />
+          </el-tooltip>
           <el-tooltip content="取消收藏">
             <el-button
               class="favorite-item__remove"
@@ -87,7 +95,6 @@ function onDrop(targetCode: string) {
 
 <style scoped>
 .favorite-panel {
-  height: 100%;
   border-radius: 8px;
 }
 
@@ -100,14 +107,15 @@ function onDrop(targetCode: string) {
 
 .favorite-list {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
 .favorite-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
-  align-items: center;
+  align-items: stretch;
   padding: 10px 12px;
   border: 1px solid #dfe5ee;
   border-radius: 8px;
@@ -159,10 +167,21 @@ function onDrop(targetCode: string) {
 .favorite-item__actions {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 6px;
 }
 
+@media (max-width: 1180px) {
+  .favorite-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 640px) {
+  .favorite-list {
+    grid-template-columns: 1fr;
+  }
+
   .favorite-item {
     grid-template-columns: 1fr;
   }
