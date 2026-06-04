@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Literal
 
@@ -29,6 +30,12 @@ class TaskQueueRegistry:
         self._run_dispatchers: dict[int, ActiveDispatcher] = {}
         self._global_chat_semaphore: asyncio.Semaphore | None = None
         self._global_chat_limit: int | None = None
+        self._per_conversation_semaphores: dict[int, asyncio.Semaphore] = {}
+        self._per_conversation_limit: int | None = None
+        self._per_agent_semaphores: dict[int, asyncio.Semaphore] = {}
+        self._per_agent_limit: int | None = None
+        self._per_user_semaphores: dict[int, asyncio.Semaphore] = {}
+        self._per_user_limit: int | None = None
         self._lock = asyncio.Lock()
 
     def build_queue_key(self, conversation_id: int) -> str:
@@ -41,6 +48,61 @@ class TaskQueueRegistry:
             self._global_chat_semaphore = asyncio.Semaphore(limit)
             self._global_chat_limit = limit
         return self._global_chat_semaphore
+
+    def _get_per_conversation_semaphore(self, conversation_id: int) -> asyncio.Semaphore:
+        settings = get_settings()
+        limit = max(1, settings.task_per_conversation_concurrency)
+        if self._per_conversation_limit != limit:
+            self._per_conversation_semaphores.clear()
+            self._per_conversation_limit = limit
+        if conversation_id not in self._per_conversation_semaphores:
+            self._per_conversation_semaphores[conversation_id] = asyncio.Semaphore(limit)
+        return self._per_conversation_semaphores[conversation_id]
+
+    def _get_per_agent_semaphore(self, agent_id: int) -> asyncio.Semaphore:
+        settings = get_settings()
+        limit = max(1, settings.task_per_agent_concurrency)
+        if self._per_agent_limit != limit:
+            self._per_agent_semaphores.clear()
+            self._per_agent_limit = limit
+        if agent_id not in self._per_agent_semaphores:
+            self._per_agent_semaphores[agent_id] = asyncio.Semaphore(limit)
+        return self._per_agent_semaphores[agent_id]
+
+    def _get_per_user_semaphore(self, user_id: int) -> asyncio.Semaphore:
+        settings = get_settings()
+        limit = max(1, settings.task_per_user_concurrency)
+        if self._per_user_limit != limit:
+            self._per_user_semaphores.clear()
+            self._per_user_limit = limit
+        if user_id not in self._per_user_semaphores:
+            self._per_user_semaphores[user_id] = asyncio.Semaphore(limit)
+        return self._per_user_semaphores[user_id]
+
+    @asynccontextmanager
+    async def _chat_concurrency_slots(
+        self,
+        *,
+        conversation_id: int,
+        agent_id: int | None,
+        user_id: int | None,
+    ) -> AsyncIterator[None]:
+        semaphores = [self._get_per_conversation_semaphore(conversation_id)]
+        if agent_id is not None:
+            semaphores.append(self._get_per_agent_semaphore(agent_id))
+        if user_id is not None:
+            semaphores.append(self._get_per_user_semaphore(user_id))
+        semaphores.append(self.get_chat_semaphore())
+
+        acquired: list[asyncio.Semaphore] = []
+        try:
+            for semaphore in semaphores:
+                await semaphore.acquire()
+                acquired.append(semaphore)
+            yield
+        finally:
+            for semaphore in reversed(acquired):
+                semaphore.release()
 
     def active_task_count(self, conversation_id: int) -> int:
         return sum(
@@ -126,6 +188,9 @@ class TaskQueueRegistry:
         conversation_id: int,
         run_id: int,
         task_func: TaskFunc,
+        *,
+        agent_id: int | None = None,
+        user_id: int | None = None,
     ) -> QueueStatus:
         async with self._lock:
             cancel_event = asyncio.Event()
@@ -133,8 +198,11 @@ class TaskQueueRegistry:
             async def runner() -> None:
                 if cancel_event.is_set():
                     return
-                semaphore = self.get_chat_semaphore()
-                async with semaphore:
+                async with self._chat_concurrency_slots(
+                    conversation_id=conversation_id,
+                    agent_id=agent_id,
+                    user_id=user_id,
+                ):
                     if cancel_event.is_set():
                         return
                     await task_func(cancel_event)
@@ -181,6 +249,9 @@ class TaskQueueRegistry:
                 await task
         self._active_dispatchers.clear()
         self._run_dispatchers.clear()
+        self._per_conversation_semaphores.clear()
+        self._per_agent_semaphores.clear()
+        self._per_user_semaphores.clear()
 
 
 task_queue = TaskQueueRegistry()

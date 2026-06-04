@@ -1,6 +1,9 @@
 import asyncio
+import os
 import unittest
+from unittest.mock import patch
 
+from app.core.config import get_settings
 from app.services.task_queue import TaskQueueRegistry
 from app.services.ws_connection_manager import WebSocketConnectionManager
 
@@ -35,6 +38,53 @@ class TaskQueueConcurrencyTest(unittest.IsolatedAsyncioTestCase):
 
         release_event.set()
         await queue.shutdown()
+
+    async def test_per_conversation_limit_queues_extra_runs(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "TASK_PER_CONVERSATION_CONCURRENCY": "2",
+                "TASK_PER_AGENT_CONCURRENCY": "10",
+                "TASK_PER_USER_CONCURRENCY": "10",
+                "TASK_GLOBAL_CHAT_CONCURRENCY": "10",
+            },
+        ):
+            get_settings.cache_clear()
+            queue = TaskQueueRegistry()
+            started: list[int] = []
+            release_events = {101: asyncio.Event(), 102: asyncio.Event(), 103: asyncio.Event()}
+
+            def make_job(run_id: int):
+                async def job(cancel_event: asyncio.Event) -> None:
+                    started.append(run_id)
+                    await release_events[run_id].wait()
+
+                return job
+
+            try:
+                await queue.enqueue_conversation_task(11, 101, make_job(101), agent_id=3, user_id=7)
+                await queue.enqueue_conversation_task(11, 102, make_job(102), agent_id=3, user_id=7)
+                await queue.enqueue_conversation_task(11, 103, make_job(103), agent_id=3, user_id=7)
+
+                for _ in range(20):
+                    if len(started) == 2:
+                        break
+                    await asyncio.sleep(0.01)
+
+                self.assertEqual(set(started), {101, 102})
+
+                release_events[101].set()
+                for _ in range(20):
+                    if 103 in started:
+                        break
+                    await asyncio.sleep(0.01)
+
+                self.assertIn(103, started)
+            finally:
+                for event in release_events.values():
+                    event.set()
+                await queue.shutdown()
+                get_settings.cache_clear()
 
     async def test_cancel_task_only_cancels_the_target_run_id(self) -> None:
         queue = TaskQueueRegistry()

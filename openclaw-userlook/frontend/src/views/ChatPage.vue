@@ -179,6 +179,8 @@ const currentRunStatusMessage = computed({
   },
 })
 
+const activeRunCount = computed(() => activeRuntime.value.activeRunIds.length)
+
 function createRuntimeState(): ConversationRuntimeState {
   return {
     sending: false,
@@ -1038,13 +1040,11 @@ async function sendMessage(content: string, fileIds: number[]) {
   }
 }
 
-async function stopCurrentRun() {
-  if (!currentRunId.value || !conversation.value) {
+async function stopRun(runId: number) {
+  if (!conversation.value) {
     return
   }
-  const runId = currentRunId.value
   const conversationId = conversation.value.id
-  sending.value = false
   currentRunStatusMessage.value = '正在停止当前回复'
   try {
     const run = await cancelRun(runId)
@@ -1053,18 +1053,27 @@ async function stopCurrentRun() {
     }
     applyRunState(run)
     if (!isActiveRunStatus(run.status)) {
-      const target = findAssistantMessage(conversationId, activeAssistantMessageId.value, runId)
+      const target = findAssistantMessage(conversationId, null, runId)
       if (target) {
         target.streaming = false
       }
-      activeAssistantMessageId.value = null
-      await loadHistory(conversationId, activeInitializeRequestId)
+      if (!getRuntimeForConversation(conversationId).sending) {
+        activeAssistantMessageId.value = null
+        await loadHistory(conversationId, activeInitializeRequestId)
+      }
     } else {
       currentRunStatusMessage.value = '正在停止当前回复'
     }
   } catch {
     ElMessage.error('停止任务失败')
   }
+}
+
+async function stopCurrentRun() {
+  if (!currentRunId.value) {
+    return
+  }
+  await stopRun(currentRunId.value)
 }
 
 function addUploadedFile(file: UserFile) {
@@ -1205,8 +1214,10 @@ onBeforeUnmount(() => {
         :run-status="currentRunStatus"
         :run-status-message="currentRunStatusMessage"
         :output-files="outputFiles"
+        :active-run-count="activeRunCount"
         @send="sendMessage"
         @stop="stopCurrentRun"
+        @stop-run="stopRun"
         @file-uploaded="addUploadedFile"
         @remove-file="removeAttachedFile"
       />

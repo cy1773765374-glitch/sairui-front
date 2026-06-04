@@ -9,6 +9,7 @@ from app.core.config import Settings, get_settings
 from app.models.agent import Agent
 from app.models.conversation import Conversation
 from app.models.user import User
+from app.services.gateway_connection_pool import GatewayConnectionPool
 from app.services.openclaw_gateway_client import (
     GATEWAY_UNAVAILABLE_MESSAGE,
     OpenClawGatewayClient,
@@ -39,8 +40,10 @@ class OpenClawAdapter:
         self,
         settings: Settings | None = None,
         gateway_client: OpenClawGatewayClient | None = None,
+        pool: GatewayConnectionPool | None = None,
     ) -> None:
         self.settings = settings or get_settings()
+        self.pool = pool
         self.gateway_client = gateway_client or OpenClawGatewayClient(
             ws_url=self.settings.openclaw_gateway_ws_url,
             token=self.settings.openclaw_gateway_token,
@@ -99,6 +102,7 @@ class OpenClawAdapter:
                 client_message_id=client_message_id,
                 gateway_session_key=gateway_session_key,
                 idempotency_key=idempotency_key,
+                pool=self.pool,
             ):
                 yield OpenClawAdapterEvent(
                     type=event.type,

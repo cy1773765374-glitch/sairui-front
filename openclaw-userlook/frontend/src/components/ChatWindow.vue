@@ -22,11 +22,13 @@ const props = defineProps<{
   runStatus: TaskRunStatus | ''
   runStatusMessage: string
   outputFiles: UserFile[]
+  activeRunCount: number
 }>()
 
 const emit = defineEmits<{
   send: [content: string, fileIds: number[]]
   stop: []
+  stopRun: [runId: number]
   fileUploaded: [file: UserFile]
   removeFile: [fileId: number]
 }>()
@@ -95,11 +97,15 @@ watch(
         v-else
         :key="message.id"
         :message="message"
+        :can-stop-run="message.streaming && !!message.run_id"
+        @stop-run="(runId) => emit('stopRun', runId)"
       />
     </div>
 
     <footer class="composer">
-      <div v-if="sending" class="response-status">Agent 正在响应</div>
+      <div v-if="sending" class="response-status">
+        Agent 正在响应<template v-if="activeRunCount > 1">（{{ activeRunCount }} 个任务进行中）</template>
+      </div>
       <div class="attachment-row">
         <FileUploader @uploaded="(file) => emit('fileUploaded', file)" />
         <el-tag

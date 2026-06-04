@@ -13,6 +13,7 @@ from app.models.conversation import Conversation
 from app.models.task_run import TERMINAL_RUN_STATUSES, TaskRun, TaskRunStatus
 from app.models.user import User
 from app.services.file_service import register_output_files
+from app.services.gateway_connection_pool import get_gateway_pool
 from app.services.openclaw_adapter import OpenClawAdapter, OpenClawAdapterEvent
 from app.services.run_service import (
     mark_task_run_cancelled,
@@ -151,7 +152,13 @@ async def start_chat_run(
             cancel_event=cancel_event,
         )
 
-    return await task_queue.enqueue_conversation_task(conversation_id, run_id, task_func)
+    return await task_queue.enqueue_conversation_task(
+        conversation_id,
+        run_id,
+        task_func,
+        agent_id=agent_id,
+        user_id=user_id,
+    )
 
 
 async def _finish_success(
@@ -339,7 +346,7 @@ async def execute_chat_run(
     persisted_text_length = 0
     assistant_message_id: int | None = None
     settings = get_settings()
-    adapter = OpenClawAdapter(settings=settings)
+    adapter = OpenClawAdapter(settings=settings, pool=get_gateway_pool())
     task_queue.set_abort(run_id, cancel_event.set)
 
     try:
