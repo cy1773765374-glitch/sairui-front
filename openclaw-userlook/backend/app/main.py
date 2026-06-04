@@ -19,6 +19,7 @@ from app.migrations.phase11_task_run_lifecycle import run_migration as run_phase
 from app.migrations.phase12_streaming_persistence import run_migration as run_phase12_migration
 from app.migrations.phase12_3_session_isolation import run_migration as run_phase12_3_migration
 from app.migrations.phase13_1_uiux import run_migration as run_phase13_1_migration
+from app.migrations.phase13_2_uiux import run_migration as run_phase13_2_migration
 from app.services.gateway_connection_pool import GatewayConnectionPool, set_gateway_pool
 from app.services.run_watchdog import watchdog_loop
 from app.services.task_queue import task_queue
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI):
     run_phase12_migration()
     run_phase12_3_migration()
     run_phase13_1_migration()
+    run_phase13_2_migration()
     pool = None
     if settings.gateway_pool_enabled:
         pool = GatewayConnectionPool(settings)

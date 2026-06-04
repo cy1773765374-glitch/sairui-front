@@ -20,6 +20,7 @@ export interface Conversation {
   agent_code: string
   agent_name: string
   title: string
+  is_title_manual?: boolean
   session_key: string
   created_at: string
   updated_at: string
@@ -57,6 +58,14 @@ export async function createConversation(
 
 export async function fetchConversation(conversationId: number): Promise<ConversationDetail> {
   const response = await apiClient.get<ConversationDetail>(`/api/conversations/${conversationId}`)
+  return response.data
+}
+
+export async function updateConversationTitle(
+  conversationId: number,
+  payload: { title: string },
+): Promise<Conversation> {
+  const response = await apiClient.patch<Conversation>(`/api/conversations/${conversationId}`, payload)
   return response.data
 }
 
