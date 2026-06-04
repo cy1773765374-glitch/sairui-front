@@ -21,7 +21,6 @@ from app.services.run_service import (
     create_task_run,
     get_task_run_by_client_message,
     get_task_run_detail,
-    get_latest_active_run_for_conversation,
     request_task_run_cancel,
 )
 from app.services.task_executor import start_chat_run
@@ -191,19 +190,6 @@ async def chat_websocket(
                             "status": existing_read.status.value,
                             "message": existing_read.error_message,
                             "output_files": jsonable_encoder(existing_read.output_files),
-                        }
-                    )
-                    continue
-
-                active_run = get_latest_active_run_for_conversation(db, current_user, conversation.id)
-                if active_run is not None or task_queue.has_active_task(conversation.id):
-                    await send_json(
-                        {
-                            "type": "active_run",
-                            "message": "当前会话已有任务正在运行",
-                            "conversation_id": conversation.id,
-                            "client_message_id": client_message_id,
-                            "active_run": jsonable_encoder(active_run) if active_run else None,
                         }
                     )
                     continue
