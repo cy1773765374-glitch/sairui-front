@@ -345,6 +345,11 @@ class DaobanJobRunner(AgentRunner):
         except Exception as exc:
             await stop_process()
             duration_seconds = int(time.monotonic() - started_monotonic)
+            with SessionLocal() as db:
+                run = db.get(TaskRun, runner_input.run_id)
+                if run is not None and run.status == TaskRunStatus.success:
+                    logger.exception("[daoban-runner] run_id=%s post_success_error_ignored", runner_input.run_id)
+                    return
             if isinstance(exc, HTTPException) and isinstance(exc.detail, dict):
                 message = str(exc.detail.get("message") or exc.detail.get("detail") or exc.detail)
                 payload = {"error_detail": exc.detail}
@@ -411,6 +416,7 @@ class DaobanJobRunner(AgentRunner):
                 content=summary,
                 raw_payload_patch=run.raw_payload,
             )
+            assistant_message_id = assistant_message.id
             run = db.get(TaskRun, runner_input.run_id) or run
             run = mark_task_run_success(db, run, output_text=summary, output_dir=output_dir)
             output_files = register_output_files(db, user.id, output_dir)
@@ -424,7 +430,7 @@ class DaobanJobRunner(AgentRunner):
             {
                 "type": "assistant_done",
                 "conversation_id": runner_input.conversation_id,
-                "message_id": assistant_message.id,
+                "message_id": assistant_message_id,
                 "run_id": runner_input.run_id,
                 "output_files": output_files_payload,
             },
@@ -490,16 +496,17 @@ class DaobanJobRunner(AgentRunner):
                     content=summary,
                     raw_payload_patch=run.raw_payload,
                 )
+                assistant_message_id = assistant_message.id
             else:
-                assistant_message = None
+                assistant_message_id = None
             append_run_event(db, runner_input.run_id, "failed", phase=phase, message=error_message, payload=raw_payload)
-        if assistant_message is not None:
+        if assistant_message_id is not None:
             await connection_manager.broadcast_json(
                 runner_input.conversation_id,
                 {
                     "type": "assistant_done",
                     "conversation_id": runner_input.conversation_id,
-                    "message_id": assistant_message.id,
+                    "message_id": assistant_message_id,
                     "run_id": runner_input.run_id,
                     "output_files": [],
                 },
