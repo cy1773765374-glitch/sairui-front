@@ -234,7 +234,6 @@ async def chat_websocket(
                         conversation.id,
                         inbound_message.file_ids,
                     )
-                    gateway_files = files_to_gateway_payload(upload_files)
                     logger.info(
                         "[chat-send] user_id=%s conversation_id=%s agent=%s file_ids=%s",
                         current_user.id,
@@ -286,6 +285,34 @@ async def chat_websocket(
                 effective_file_ids = classification.effective_file_ids
                 if effective_file_ids is None:
                     effective_file_ids = [file.id for file in upload_files]
+                try:
+                    if list(dict.fromkeys(effective_file_ids)) == [file.id for file in upload_files]:
+                        effective_upload_files = upload_files
+                    else:
+                        effective_upload_files = validate_and_bind_upload_files(
+                            db,
+                            current_user,
+                            conversation.id,
+                            effective_file_ids,
+                        )
+                    effective_files_payload = files_to_gateway_payload(effective_upload_files)
+                except HTTPException as exc:
+                    db.rollback()
+                    detail, code, invalid_file_ids = _http_exception_detail(
+                        exc,
+                        fallback_file_ids=effective_file_ids,
+                    )
+                    await send_json(
+                        {
+                            "type": "error",
+                            "code": code,
+                            "message": detail,
+                            "invalid_file_ids": invalid_file_ids,
+                            "conversation_id": conversation.id,
+                            "client_message_id": client_message_id,
+                        }
+                    )
+                    continue
                 run_type = "job" if classification.task_kind == TaskKind.long_job else "chat"
                 if classification.task_kind == TaskKind.pending_input:
                     run_type = "pending_input"
@@ -317,12 +344,14 @@ async def chat_websocket(
                         "file_ids": [file.id for file in upload_files],
                         "effective_content": effective_content,
                         "effective_file_ids": effective_file_ids,
-                        "files": gateway_files,
+                        "files": effective_files_payload,
+                        "attachments": effective_files_payload,
                         "channel": provisional_identity.channel,
                         "agent_code": provisional_identity.agent_code,
                         "openclaw_agent_id": provisional_identity.openclaw_agent_id,
                         "workspace_path": workspace_path,
                         "task_kind": classification.task_kind.value,
+                        "task_type": classification.task_type,
                         "runner_name": classification.runner,
                         "classification_reason": classification.reason,
                         "selected_pending_file_id": classification.selected_pending_file_id,
@@ -347,6 +376,7 @@ async def chat_websocket(
                     **identity.model_dump(),
                     "workspace_path": workspace_path,
                     "task_kind": classification.task_kind.value,
+                    "task_type": classification.task_type,
                     "runner_name": classification.runner,
                     "classification_reason": classification.reason,
                     "status": "queued",
@@ -364,6 +394,8 @@ async def chat_websocket(
                     "file_ids": inbound_message.file_ids,
                     "effective_content": effective_content,
                     "effective_file_ids": effective_file_ids,
+                    "files": effective_files_payload,
+                    "attachments": effective_files_payload,
                     "client_message_id": identity.client_message_id,
                     "conversation_id": conversation.id,
                     "run_id": task_run.id,
@@ -386,7 +418,7 @@ async def chat_websocket(
                     agent=agent,
                     conversation_id=conversation.id,
                     session_key=identity.session_key,
-                    file_ids=inbound_message.file_ids,
+                    file_ids=effective_file_ids,
                     ip=websocket.client.host if websocket.client else None,
                     user_agent=websocket.headers.get("user-agent"),
                 )
@@ -402,6 +434,7 @@ async def chat_websocket(
                 )
 
                 if classification.task_kind == TaskKind.pending_input:
+                    pending_task_type = classification.task_type or DAOBAN_TASK_TYPE
                     if classification.memory_action == MemoryAction.save_pdf:
                         pdf_file_ids = [file.id for file in upload_files if is_pdf_file(file)]
                         save_pending_files(
@@ -409,8 +442,18 @@ async def chat_websocket(
                             user=current_user,
                             conversation_id=conversation.id,
                             agent=agent,
-                            task_type=DAOBAN_TASK_TYPE,
+                            task_type=pending_task_type,
                             file_ids=pdf_file_ids,
+                            source_message_id=user_message.id,
+                        )
+                    elif classification.memory_action == MemoryAction.save_files:
+                        save_pending_files(
+                            db,
+                            user=current_user,
+                            conversation_id=conversation.id,
+                            agent=agent,
+                            task_type=pending_task_type,
+                            file_ids=effective_file_ids,
                             source_message_id=user_message.id,
                         )
                     elif classification.memory_action == MemoryAction.save_text:
@@ -419,17 +462,37 @@ async def chat_websocket(
                             user=current_user,
                             conversation_id=conversation.id,
                             agent=agent,
-                            task_type=DAOBAN_TASK_TYPE,
+                            task_type=pending_task_type,
                             text_value=effective_content,
                             source_message_id=user_message.id,
                         )
+                    elif classification.memory_action == MemoryAction.save_text_and_files:
+                        save_pending_text(
+                            db,
+                            user=current_user,
+                            conversation_id=conversation.id,
+                            agent=agent,
+                            task_type=pending_task_type,
+                            text_value=effective_content,
+                            source_message_id=user_message.id,
+                        )
+                        if effective_file_ids:
+                            save_pending_files(
+                                db,
+                                user=current_user,
+                                conversation_id=conversation.id,
+                                agent=agent,
+                                task_type=pending_task_type,
+                                file_ids=effective_file_ids,
+                                source_message_id=user_message.id,
+                            )
                     elif classification.memory_action == MemoryAction.clear_pending:
                         cancel_pending_task(
                             db,
                             user_id=current_user.id,
                             conversation_id=conversation.id,
                             agent_id=agent.id,
-                            task_type=DAOBAN_TASK_TYPE,
+                            task_type=pending_task_type,
                         )
 
                     response_message = classification.response_message or "已记录当前输入。"
@@ -481,7 +544,7 @@ async def chat_websocket(
                     conversation_id=conversation.id,
                     content=effective_content,
                     file_ids=effective_file_ids,
-                    gateway_files=gateway_files,
+                    gateway_files=effective_files_payload,
                 )
                 await send_json(
                     {

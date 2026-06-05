@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { CopyDocument } from '@element-plus/icons-vue'
+import { CopyDocument, Download } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
 import type { LocalMessage } from '../api/conversations'
+import { downloadFile, formatFileSize, type UserFile } from '../api/files'
 import { formatDateTimeShanghai } from '../utils/time'
 
 const props = defineProps<{
@@ -58,6 +59,71 @@ function renderMarkdown(value: string) {
 const renderedContent = computed(() => renderMarkdown(props.message.content))
 const canCopy = computed(() => props.message.role === 'assistant' && !props.message.streaming)
 
+interface AttachmentDisplay {
+  id: number | null
+  name: string
+  size: number | null
+  file: UserFile | null
+}
+
+function toNumber(value: unknown): number | null {
+  const numericValue = Number(value)
+  return Number.isInteger(numericValue) && numericValue > 0 ? numericValue : null
+}
+
+function normalizeAttachment(value: unknown, index: number): AttachmentDisplay | null {
+  if (!value || typeof value !== 'object') {
+    const id = toNumber(value)
+    return id ? { id, name: `文件 #${id}`, size: null, file: null } : null
+  }
+  const raw = value as Record<string, unknown>
+  const id = toNumber(raw.id ?? raw.file_id)
+  const name = String(raw.original_name ?? raw.name ?? raw.stored_name ?? (id ? `文件 #${id}` : `附件 ${index + 1}`))
+  const sizeValue = Number(raw.file_size ?? raw.size)
+  const size = Number.isFinite(sizeValue) && sizeValue >= 0 ? sizeValue : null
+  const file = id
+    ? ({
+        id,
+        user_id: Number(raw.user_id ?? 0),
+        conversation_id: toNumber(raw.conversation_id),
+        agent_code: typeof raw.agent_code === 'string' ? raw.agent_code : null,
+        original_name: name,
+        stored_name: typeof raw.stored_name === 'string' ? raw.stored_name : null,
+        file_type: String(raw.file_type ?? ''),
+        mime_type: typeof raw.mime_type === 'string' ? raw.mime_type : null,
+        file_size: size ?? 0,
+        sha256: typeof raw.sha256 === 'string' ? raw.sha256 : null,
+        status: typeof raw.status === 'string' ? raw.status : 'ready',
+        workspace_path: typeof raw.workspace_path === 'string' ? raw.workspace_path : null,
+        purpose: 'upload',
+        created_at: typeof raw.created_at === 'string' ? raw.created_at : props.message.created_at,
+        updated_at: typeof raw.updated_at === 'string' ? raw.updated_at : null,
+        download_url: typeof raw.download_url === 'string' ? raw.download_url : `/api/files/${id}/download`,
+      } satisfies UserFile)
+    : null
+  return { id, name, size, file }
+}
+
+const attachments = computed(() => {
+  if (props.message.role !== 'user') {
+    return []
+  }
+  const rawPayload = props.message.raw_payload
+  if (!rawPayload) {
+    return []
+  }
+  const source = Array.isArray(rawPayload.attachments)
+    ? rawPayload.attachments
+    : Array.isArray(rawPayload.files)
+      ? rawPayload.files
+      : Array.isArray(rawPayload.file_ids)
+        ? rawPayload.file_ids
+        : []
+  return source
+    .map((item, index) => normalizeAttachment(item, index))
+    .filter((item): item is AttachmentDisplay => Boolean(item))
+})
+
 async function copyMessageContent() {
   try {
     if (navigator.clipboard?.writeText) {
@@ -77,6 +143,13 @@ async function copyMessageContent() {
   } catch {
     ElMessage.error('复制失败')
   }
+}
+
+async function downloadAttachment(attachment: AttachmentDisplay) {
+  if (!attachment.file) {
+    return
+  }
+  await downloadFile(attachment.file)
 }
 </script>
 
@@ -100,6 +173,19 @@ async function copyMessageContent() {
         </div>
       </div>
       <div class="message-content" v-html="renderedContent" />
+      <div v-if="attachments.length" class="message-attachments">
+        <el-button
+          v-for="attachment in attachments"
+          :key="attachment.id ?? attachment.name"
+          link
+          type="primary"
+          :icon="Download"
+          :disabled="!attachment.file"
+          @click="downloadAttachment(attachment)"
+        >
+          {{ attachment.name }}<template v-if="attachment.size !== null"> · {{ formatFileSize(attachment.size) }}</template>
+        </el-button>
+      </div>
       <div v-if="message.streaming" class="message-status">
         <span>生成中</span>
         <el-button
@@ -227,5 +313,18 @@ async function copyMessageContent() {
   gap: 8px;
   color: #6f7785;
   font-size: 12px;
+}
+
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.message-attachments .el-button {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

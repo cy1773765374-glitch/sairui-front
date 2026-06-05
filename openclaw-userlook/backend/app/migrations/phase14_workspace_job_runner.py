@@ -19,7 +19,11 @@ WORKSPACE_BY_CODE = {
     "mysql_analysis": ("/home/cy/.openclaw/workspace-huizong-ceshi", "auto"),
     "huizong_ceshi": ("/home/cy/.openclaw/workspace-huizong-ceshi", "auto"),
     "huizong-ceshi": ("/home/cy/.openclaw/workspace-huizong-ceshi", "auto"),
-    "ppt_generation": ("/home/cy/.openclaw/workspace", "auto"),
+    "ppt_generation": ("/home/cy/.openclaw/workspace-PPT-Generation", "job"),
+    "ppt-generation": ("/home/cy/.openclaw/workspace-PPT-Generation", "job"),
+    "pptmaster": ("/home/cy/.openclaw/workspace-PPT-Generation", "job"),
+    "ppt-master": ("/home/cy/.openclaw/workspace-PPT-Generation", "job"),
+    "ppt": ("/home/cy/.openclaw/workspace-PPT-Generation", "job"),
 }
 
 
@@ -150,6 +154,24 @@ def _create_run_events(connection) -> None:
 
 def _seed_agent_workspaces(connection) -> None:
     for code, (workspace_path, execution_mode) in WORKSPACE_BY_CODE.items():
+        if code in {"ppt_generation", "ppt-generation", "pptmaster", "ppt-master", "ppt"}:
+            connection.execute(
+                text(
+                    """
+                    UPDATE `agents`
+                    SET
+                        `workspace_path` = :workspace_path,
+                        `execution_mode` = :execution_mode
+                    WHERE `code` = :code OR `openclaw_agent_id` = :code
+                    """
+                ),
+                {
+                    "code": code,
+                    "workspace_path": workspace_path,
+                    "execution_mode": execution_mode,
+                },
+            )
+            continue
         connection.execute(
             text(
                 """

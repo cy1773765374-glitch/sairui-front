@@ -43,8 +43,8 @@ DEFAULT_AGENTS = [
         "risk_level": AgentRiskLevel.medium,
         "support_files": True,
         "support_images": True,
-        "workspace_path": "/home/cy/.openclaw/workspace",
-        "execution_mode": "auto",
+        "workspace_path": "/home/cy/.openclaw/workspace-PPT-Generation",
+        "execution_mode": "job",
     },
     {
         "code": "image_daoban",

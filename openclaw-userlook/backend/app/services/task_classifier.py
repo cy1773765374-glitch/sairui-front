@@ -11,6 +11,11 @@ from app.models.pending_task_input import PendingTaskInput
 from app.models.user import User
 from app.services.daoban_service import is_daoban_agent, is_pdf_file
 from app.services.pending_task_service import get_pending_task
+from app.services.ppt_generation_service import (
+    has_ppt_generation_intent,
+    is_incomplete_ppt_input,
+    is_ppt_generation_agent,
+)
 
 
 class TaskKind(str, Enum):
@@ -22,7 +27,9 @@ class TaskKind(str, Enum):
 class MemoryAction(str, Enum):
     none = "none"
     save_pdf = "save_pdf"
+    save_files = "save_files"
     save_text = "save_text"
+    save_text_and_files = "save_text_and_files"
     clear_pending = "clear_pending"
     consume_pending = "consume_pending"
 
@@ -40,9 +47,11 @@ class TaskClassification:
     effective_file_ids: list[int] | None = None
     selected_pending_file_id: int | None = None
     pending_task: PendingTaskInput | None = None
+    task_type: str | None = None
 
 
 DAOBAN_TASK_TYPE = "daoban"
+PPT_TASK_TYPE = "ppt_generation"
 LONG_JOB_KEYWORDS = (
     "生成",
     "合成",
@@ -74,6 +83,10 @@ def _pending_file_ids(pending: PendingTaskInput | None) -> list[int]:
     return []
 
 
+def _dedupe_ints(values: list[int]) -> list[int]:
+    return list(dict.fromkeys(int(value) for value in values if value is not None))
+
+
 def classify_task(
     db: Session,
     *,
@@ -103,6 +116,7 @@ def classify_task(
                 effective_content=text_value,
                 effective_file_ids=file_ids,
                 pending_task=pending,
+                task_type=DAOBAN_TASK_TYPE,
             )
 
         pdf_files = [file for file in files if is_pdf_file(file)]
@@ -120,6 +134,7 @@ def classify_task(
                 effective_file_ids=file_ids,
                 selected_pending_file_id=None,
                 pending_task=pending,
+                task_type=DAOBAN_TASK_TYPE,
             )
 
         if current_pdf_file_ids and pending_text:
@@ -132,6 +147,7 @@ def classify_task(
                 effective_file_ids=file_ids,
                 selected_pending_file_id=None,
                 pending_task=pending,
+                task_type=DAOBAN_TASK_TYPE,
             )
 
         if current_pdf_file_ids:
@@ -146,6 +162,7 @@ def classify_task(
                 effective_file_ids=file_ids,
                 selected_pending_file_id=current_pdf_file_ids[-1],
                 pending_task=pending,
+                task_type=DAOBAN_TASK_TYPE,
             )
 
         if text_value and pending_files:
@@ -159,6 +176,7 @@ def classify_task(
                 effective_file_ids=[selected_file_id],
                 selected_pending_file_id=selected_file_id,
                 pending_task=pending,
+                task_type=DAOBAN_TASK_TYPE,
             )
 
         if text_value:
@@ -172,6 +190,7 @@ def classify_task(
                 effective_content=text_value,
                 effective_file_ids=file_ids,
                 pending_task=pending,
+                task_type=DAOBAN_TASK_TYPE,
             )
 
         return TaskClassification(
@@ -184,7 +203,85 @@ def classify_task(
             effective_content=text_value,
             effective_file_ids=file_ids,
             pending_task=pending,
+            task_type=DAOBAN_TASK_TYPE,
         )
+
+    if is_ppt_generation_agent(agent):
+        pending = get_pending_task(
+            db,
+            user_id=user.id,
+            conversation_id=conversation_id,
+            agent_id=agent.id,
+            task_type=PPT_TASK_TYPE,
+        )
+        if text_value.lower() in CLEAR_PENDING_WORDS:
+            return TaskClassification(
+                task_kind=TaskKind.pending_input,
+                runner="pending_input",
+                reason="ppt_clear_pending",
+                memory_action=MemoryAction.clear_pending,
+                response_message="已清空当前待处理的 PPT 输入。",
+                effective_content=text_value,
+                effective_file_ids=file_ids,
+                pending_task=pending,
+                task_type=PPT_TASK_TYPE,
+            )
+
+        pending_files = _pending_file_ids(pending)
+        pending_text = (pending.pending_text or "").strip() if pending is not None else ""
+        effective_file_ids = _dedupe_ints(pending_files + file_ids)
+
+        if text_value and is_incomplete_ppt_input(text_value):
+            return TaskClassification(
+                task_kind=TaskKind.pending_input,
+                runner="pending_input",
+                reason="ppt_incomplete_text",
+                requires_text=True,
+                memory_action=MemoryAction.save_text_and_files if file_ids else MemoryAction.save_text,
+                response_message="已收到资料，请继续发送 PPT 生成需求，例如页数、主题、语言、类目或风格。",
+                effective_content=text_value,
+                effective_file_ids=effective_file_ids,
+                pending_task=pending,
+                task_type=PPT_TASK_TYPE,
+            )
+
+        if text_value and has_ppt_generation_intent(text_value):
+            return TaskClassification(
+                task_kind=TaskKind.long_job,
+                runner="ppt_generation_job",
+                reason="ppt_text_intent",
+                memory_action=MemoryAction.consume_pending if pending is not None else MemoryAction.none,
+                effective_content=text_value,
+                effective_file_ids=effective_file_ids,
+                pending_task=pending,
+                task_type=PPT_TASK_TYPE,
+            )
+
+        if file_ids and pending_text and has_ppt_generation_intent(pending_text):
+            return TaskClassification(
+                task_kind=TaskKind.long_job,
+                runner="ppt_generation_job",
+                reason="ppt_files_after_pending_text",
+                memory_action=MemoryAction.consume_pending,
+                effective_content=pending_text,
+                effective_file_ids=effective_file_ids,
+                pending_task=pending,
+                task_type=PPT_TASK_TYPE,
+            )
+
+        if not text_value and file_ids:
+            return TaskClassification(
+                task_kind=TaskKind.pending_input,
+                runner="pending_input",
+                reason="ppt_files_only",
+                requires_text=True,
+                memory_action=MemoryAction.save_files,
+                response_message="已收到资料，请继续发送 PPT 生成需求，例如页数、主题、语言、类目或风格。",
+                effective_content=text_value,
+                effective_file_ids=effective_file_ids,
+                pending_task=pending,
+                task_type=PPT_TASK_TYPE,
+            )
 
     execution_mode = (agent.execution_mode or "chat").strip().lower()
     reason = "default_short_chat"

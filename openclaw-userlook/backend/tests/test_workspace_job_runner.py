@@ -11,9 +11,15 @@ from app.models.conversation import Conversation
 from app.models.file import File, FilePurpose
 from app.models.user import User, UserRole, UserStatus
 from app.services.pending_task_service import consume_pending_task, save_pending_files, save_pending_text
+from app.services.runners.ppt_generation_job_runner import (
+    build_ppt_generation_command,
+    extract_json_object,
+    ppt_failure_text,
+    ppt_success_text,
+)
 from app.services.runners.daoban_job_runner import build_daoban_command, inspect_daoban_outputs
 from app.services.runners.router import AgentRunnerRouter
-from app.services.task_classifier import DAOBAN_TASK_TYPE, TaskKind, classify_task
+from app.services.task_classifier import DAOBAN_TASK_TYPE, PPT_TASK_TYPE, MemoryAction, TaskKind, classify_task
 from app.services.workspace_service import resolve_agent_workspace
 
 
@@ -30,6 +36,8 @@ class WorkspaceJobRunnerTest(unittest.TestCase):
             ("xingzheng", "xingzheng_a", "/home/cy/.openclaw/workspace-xingzheng_a"),
             ("image_daoban", "image-daoban", "/home/cy/.openclaw/workspace-image-daoban"),
             ("mysql_analysis", "huizong-ceshi", "/home/cy/.openclaw/workspace-huizong-ceshi"),
+            ("ppt_generation", "ppt-generation", "/home/cy/.openclaw/workspace-PPT-Generation"),
+            ("pptmaster", "ppt-master", "/home/cy/.openclaw/workspace-PPT-Generation"),
         ]
         for code, openclaw_agent_id, expected in cases:
             agent = Agent(
@@ -147,6 +155,105 @@ class WorkspaceJobRunnerTest(unittest.TestCase):
             self.assertIn("out.pdf", found)
             self.assertIn("layout_plan.json", missing)
 
+    def test_task_classifier_ppt_text_intent_runs_local_job(self) -> None:
+        with self.session_factory() as db:
+            user, agent, conversation = self._seed_ppt_user_agent_conversation(db)
+            result = classify_task(
+                db,
+                user=user,
+                agent=agent,
+                conversation_id=conversation.id,
+                content="生成一个厨房餐具相关的3页的商品目录册PPT",
+                files=[],
+            )
+            self.assertEqual(result.task_kind, TaskKind.long_job)
+            self.assertEqual(result.runner, "ppt_generation_job")
+            self.assertEqual(result.task_type, PPT_TASK_TYPE)
+            self.assertEqual(result.effective_file_ids, [])
+
+    def test_task_classifier_ppt_plain_chat_stays_gateway(self) -> None:
+        with self.session_factory() as db:
+            user, agent, conversation = self._seed_ppt_user_agent_conversation(db)
+            result = classify_task(
+                db,
+                user=user,
+                agent=agent,
+                conversation_id=conversation.id,
+                content="你好，介绍一下自己",
+                files=[],
+            )
+            self.assertEqual(result.task_kind, TaskKind.short_chat)
+            self.assertEqual(result.runner, "gateway_chat")
+
+    def test_task_classifier_ppt_file_only_saves_pending(self) -> None:
+        with self.session_factory() as db:
+            user, agent, conversation = self._seed_ppt_user_agent_conversation(db)
+            source = self._file(user.id, 22, "catalog.xlsx", file_type="xlsx", mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            result = classify_task(db, user=user, agent=agent, conversation_id=conversation.id, content="", files=[source])
+            self.assertEqual(result.task_kind, TaskKind.pending_input)
+            self.assertEqual(result.memory_action, MemoryAction.save_files)
+            self.assertEqual(result.effective_file_ids, [22])
+            self.assertIn("已收到资料", result.response_message or "")
+
+    def test_task_classifier_ppt_text_after_pending_file_merges_file_ids(self) -> None:
+        with self.session_factory() as db:
+            user, agent, conversation = self._seed_ppt_user_agent_conversation(db)
+            pending = save_pending_files(
+                db,
+                user=user,
+                conversation_id=conversation.id,
+                agent=agent,
+                task_type=PPT_TASK_TYPE,
+                file_ids=[22],
+            )
+            result = classify_task(
+                db,
+                user=user,
+                agent=agent,
+                conversation_id=conversation.id,
+                content="根据刚才资料，生成一个5页英文商品目录册PPT，风格简洁商务",
+                files=[],
+            )
+            self.assertEqual(result.task_kind, TaskKind.long_job)
+            self.assertEqual(result.runner, "ppt_generation_job")
+            self.assertEqual(result.memory_action, MemoryAction.consume_pending)
+            self.assertEqual(result.pending_task.id, pending.id)
+            self.assertEqual(result.effective_file_ids, [22])
+
+    def test_task_classifier_ppt_incomplete_text_saves_pending(self) -> None:
+        with self.session_factory() as db:
+            user, agent, conversation = self._seed_ppt_user_agent_conversation(db)
+            result = classify_task(
+                db,
+                user=user,
+                agent=agent,
+                conversation_id=conversation.id,
+                content="等下按这个做 PPT",
+                files=[],
+            )
+            self.assertEqual(result.task_kind, TaskKind.pending_input)
+            self.assertEqual(result.memory_action, MemoryAction.save_text)
+
+    def test_ppt_runner_builds_command_and_parses_json(self) -> None:
+        command = build_ppt_generation_command(
+            workspace=Path("/home/cy/.openclaw/workspace-PPT-Generation"),
+            prompt="生成3页PPT",
+            sender_name="Alice",
+            sender_open_id="7",
+        )
+        self.assertIn("scripts/generate_catalog_ppt.py", command)
+        self.assertIn("--prompt", command)
+        self.assertIn("生成3页PPT", command)
+        self.assertNotIn(" ".join(command), command)
+
+        data = extract_json_object('log line\n{"ok": true, "reply_text": "Z:\\\\yaq\\\\ppt\\\\catalog\\\\demo.pptx", "validation": {"ok": true}}')
+        self.assertTrue(data["ok"])
+        self.assertEqual(ppt_success_text(data), "Z:\\yaq\\ppt\\catalog\\demo.pptx")
+        self.assertEqual(
+            ppt_failure_text({"ok": False, "error": "图片生成失败"}),
+            "PPT 生成失败：图片生成失败",
+        )
+
     def test_router_selects_daoban_runner_without_gateway(self) -> None:
         from app.models.task_run import TaskRun, TaskRunStatus
 
@@ -169,6 +276,30 @@ class WorkspaceJobRunnerTest(unittest.TestCase):
             runner_name="daoban_job",
         )
         self.assertEqual(AgentRunnerRouter().select_runner(run=run, agent=agent).name, "daoban_job")
+
+    def test_router_selects_ppt_runner_without_gateway(self) -> None:
+        from app.models.task_run import TaskRun, TaskRunStatus
+
+        agent = Agent(
+            id=3,
+            code="ppt_generation",
+            name="PPT 生成 Agent",
+            openclaw_agent_id="ppt-generation",
+            risk_level=AgentRiskLevel.medium,
+        )
+        run = TaskRun(
+            id=8,
+            user_id=1,
+            agent_id=agent.id,
+            conversation_id=1,
+            status=TaskRunStatus.queued,
+            input_text="生成3页PPT",
+            run_type="job",
+            priority=100,
+            runner_name="ppt_generation_job",
+        )
+        self.assertEqual(AgentRunnerRouter().select_runner(run=run, agent=agent).name, "ppt_generation_job")
+
 
     def _seed_user_agent_conversation(self, db):
         user = User(
@@ -199,14 +330,51 @@ class WorkspaceJobRunnerTest(unittest.TestCase):
         db.commit()
         return user, agent, conversation
 
-    def _file(self, user_id: int, file_id: int, name: str) -> File:
+    def _seed_ppt_user_agent_conversation(self, db):
+        user = User(
+            id=7,
+            username="alice",
+            password_hash="x",
+            display_name="Alice",
+            status=UserStatus.active,
+            role=UserRole.user,
+        )
+        agent = Agent(
+            id=4,
+            code="ppt_generation",
+            name="PPT 生成 Agent",
+            openclaw_agent_id="ppt-generation",
+            risk_level=AgentRiskLevel.medium,
+            workspace_path="/home/cy/.openclaw/workspace-PPT-Generation",
+            execution_mode="job",
+        )
+        conversation = Conversation(
+            id=20,
+            user_id=user.id,
+            agent_id=agent.id,
+            title="PPT",
+            session_key="web:7:ppt_generation:20",
+        )
+        db.add_all([user, agent, conversation])
+        db.commit()
+        return user, agent, conversation
+
+    def _file(
+        self,
+        user_id: int,
+        file_id: int,
+        name: str,
+        *,
+        file_type: str = "pdf",
+        mime_type: str = "application/pdf",
+    ) -> File:
         return File(
             id=file_id,
             user_id=user_id,
             original_name=name,
             stored_path=f"/tmp/{name}",
-            file_type="pdf",
-            mime_type="application/pdf",
+            file_type=file_type,
+            mime_type=mime_type,
             file_size=4,
             purpose=FilePurpose.upload,
             status="ready",

@@ -76,6 +76,10 @@ class Settings(BaseSettings):
         default="/home/cy/.openclaw/workspace-image-daoban",
         alias="OPENCLAW_DAOBAN_WORKSPACE",
     )
+    ppt_generation_workspace: str = Field(
+        default="/home/cy/.openclaw/workspace-PPT-Generation",
+        alias="PPT_GENERATION_WORKSPACE",
+    )
     openclaw_daoban_output_root: str = Field(
         default="/data/share/yaq/test",
         alias="DAOBAN_OUTPUT_ROOT",

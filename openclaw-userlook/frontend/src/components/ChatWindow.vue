@@ -50,7 +50,7 @@ const filesUploading = computed(() => uploadingFileCount.value > 0)
 const hasDraftOrFile = computed(() => draft.value.trim().length > 0 || props.attachedFiles.length > 0)
 const canSend = computed(() => props.connected && !props.sending && !filesUploading.value && hasDraftOrFile.value)
 const canStop = computed(() => props.runId !== null && ['queued', 'running'].includes(props.runStatus))
-const isLongJob = computed(() => props.runTaskKind === 'long_job' || props.runnerName === 'daoban_job')
+const isLongJob = computed(() => props.runTaskKind === 'long_job' || ['daoban_job', 'ppt_generation_job'].includes(props.runnerName || ''))
 const jobElapsedLabel = computed(() => {
   const seconds = Math.max(0, Math.floor(props.runDurationSeconds ?? 0))
   const minutes = Math.floor(seconds / 60)

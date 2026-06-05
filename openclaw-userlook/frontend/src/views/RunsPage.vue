@@ -138,6 +138,37 @@ function runDuration(row: TaskRun) {
   return elapsedBetween(row.started_at, row.finished_at)
 }
 
+function rawPayloadObject(row: TaskRun): Record<string, unknown> {
+  return row.raw_payload && typeof row.raw_payload === 'object' && !Array.isArray(row.raw_payload)
+    ? (row.raw_payload as Record<string, unknown>)
+    : {}
+}
+
+function runnerLabel(row: TaskRun) {
+  if (row.runner_name === 'ppt_generation_job') {
+    return 'PPT 本地生成'
+  }
+  if (row.runner_name === 'daoban_job') {
+    return '刀版本地生成'
+  }
+  if (row.runner_name === 'gateway_chat') {
+    return 'Gateway 对话'
+  }
+  return row.runner_name || row.task_kind || '-'
+}
+
+function runOutputPath(row: TaskRun) {
+  const rawPayload = rawPayloadObject(row)
+  return String(
+    rawPayload.windows_path ||
+      rawPayload.pptx_path ||
+      rawPayload.run_dir ||
+      row.output_dir ||
+      row.output_text ||
+      '-',
+  )
+}
+
 function resetFilters() {
   filters.value = {
     status: '',
@@ -353,10 +384,26 @@ onMounted(async () => {
           </template>
         </el-table-column>
         <el-table-column prop="run_type" label="run_type" width="110" />
+        <el-table-column label="任务类型" min-width="140">
+          <template #default="{ row }: { row: TaskRun }">
+            {{ runnerLabel(row) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="task_kind" label="task_kind" width="120" />
         <el-table-column prop="priority" label="priority" width="100" />
         <el-table-column label="agent" min-width="170">
           <template #default="{ row }: { row: TaskRun }">
             {{ row.agent_name || row.agent_code || row.agent_id }}
+          </template>
+        </el-table-column>
+        <el-table-column label="输出路径" min-width="260">
+          <template #default="{ row }: { row: TaskRun }">
+            <span class="path-cell">{{ runOutputPath(row) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="workspace" min-width="260">
+          <template #default="{ row }: { row: TaskRun }">
+            <span class="path-cell">{{ row.workspace_path || '-' }}</span>
           </template>
         </el-table-column>
         <el-table-column label="created_at" min-width="180">
@@ -514,6 +561,15 @@ pre {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.path-cell {
+  display: inline-block;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
 }
 
 @media (max-width: 720px) {
