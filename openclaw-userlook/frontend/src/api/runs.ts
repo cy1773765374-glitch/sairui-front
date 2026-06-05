@@ -36,6 +36,12 @@ export interface TaskRun {
   output_files_json: unknown | null
   raw_payload: unknown | null
   raw_payload_summary: unknown | null
+  task_kind: string | null
+  runner_name: string | null
+  workspace_path: string | null
+  phase: string | null
+  progress_message: string | null
+  duration_seconds: number | null
   client_message_id: string | null
   gateway_session_key: string | null
   idempotency_key: string | null

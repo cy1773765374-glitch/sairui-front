@@ -37,6 +37,12 @@ RAW_PAYLOAD_COMPACT_KEYS = (
     "last_delta_at",
     "chunk_count",
     "assistant_message_id",
+    "task_kind",
+    "runner_name",
+    "workspace_path",
+    "phase",
+    "progress_message",
+    "duration_seconds",
 )
 
 
@@ -146,6 +152,12 @@ def _to_read(
         output_files_json=run.output_files_json,
         raw_payload=run.raw_payload if include_details else _compact_raw_payload(run.raw_payload),
         raw_payload_summary=_raw_payload_summary(db, run.id) if include_details else None,
+        task_kind=run.task_kind,
+        runner_name=run.runner_name,
+        workspace_path=run.workspace_path,
+        phase=run.phase,
+        progress_message=run.progress_message,
+        duration_seconds=run.duration_seconds,
         client_message_id=run.client_message_id,
         gateway_session_key=run.gateway_session_key,
         idempotency_key=run.idempotency_key,
@@ -174,14 +186,13 @@ def create_task_run(
     client_message_id: str | None = None,
     gateway_session_key: str | None = None,
     idempotency_key: str | None = None,
+    task_kind: str | None = None,
+    runner_name: str | None = None,
+    workspace_path: str | None = None,
     raw_payload: dict | None = None,
 ) -> TaskRun:
     settings = get_settings()
-    timeout_seconds = (
-        settings.task_job_timeout_seconds
-        if run_type == "job"
-        else settings.task_short_chat_timeout_seconds
-    )
+    timeout_seconds = None if run_type == "job" else settings.task_short_chat_timeout_seconds
     now = _utc_now()
     run = TaskRun(
         user_id=current_user.id,
@@ -197,6 +208,9 @@ def create_task_run(
         client_message_id=client_message_id,
         gateway_session_key=gateway_session_key,
         idempotency_key=idempotency_key,
+        task_kind=task_kind,
+        runner_name=runner_name,
+        workspace_path=workspace_path,
         raw_payload=raw_payload,
     )
     db.add(run)

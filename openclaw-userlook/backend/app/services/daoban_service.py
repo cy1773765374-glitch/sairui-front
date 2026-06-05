@@ -100,7 +100,8 @@ def build_daoban_payload(
     files: list[File],
     pdf_file: File,
 ) -> dict[str, object]:
-    workspace = get_settings().openclaw_daoban_workspace
+    settings = get_settings()
+    workspace = settings.openclaw_daoban_workspace
     gateway_files = files_to_gateway_payload(files, prefer_workspace_path=True)
     pdf_path = pdf_file.workspace_path
     if not pdf_path or not Path(pdf_path).expanduser().is_file():
@@ -113,7 +114,7 @@ def build_daoban_payload(
             "pdf_path": pdf_path,
             "prompt": content,
             "job_label": content,
-            "output_root": DAOBAN_OUTPUT_ROOT,
+            "output_root": settings.openclaw_daoban_output_root,
             "expected_outputs": DAOBAN_EXPECTED_OUTPUTS,
         },
     }
@@ -182,7 +183,8 @@ def build_daoban_gateway_message(content: str, files: list[dict[str, object]]) -
         None,
     )
     pdf_path = str((pdf_file or {}).get("workspace_path") or (pdf_file or {}).get("path") or "")
-    workspace = get_settings().openclaw_daoban_workspace
+    settings = get_settings()
+    workspace = settings.openclaw_daoban_workspace
     if not pdf_path:
         return content
     return "\n".join(
@@ -203,7 +205,7 @@ def build_daoban_gateway_message(content: str, files: list[dict[str, object]]) -
             "6. 使用 --export-mode both。",
             "7. 使用 --layout-mode shape-aware。",
             "8. 启用 ai_handoff。",
-            f"9. 输出目录使用 {DAOBAN_OUTPUT_ROOT}。",
+            f"9. 输出目录使用 {settings.openclaw_daoban_output_root}。",
             "10. 生成完成后返回 out.pdf、out.png、report.json、qc_report.json、ai_handoff/out_ai.pdf 路径。",
             "",
             "推荐命令：",

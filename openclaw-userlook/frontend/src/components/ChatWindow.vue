@@ -3,7 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { Close, Connection, Download, Expand, Fold, Promotion, VideoPause } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
-import { formatFileSize, type UserFile } from '../api/files'
+import { downloadFile, formatFileSize, type UserFile } from '../api/files'
 import type { TaskRunStatus } from '../api/runs'
 import type { LocalMessage } from '../api/conversations'
 import FileUploader from './FileUploader.vue'
@@ -21,6 +21,11 @@ const props = defineProps<{
   runId: number | null
   runStatus: TaskRunStatus | ''
   runStatusMessage: string
+  runTaskKind?: string | null
+  runnerName?: string | null
+  runPhase?: string | null
+  runProgressMessage?: string | null
+  runDurationSeconds?: number | null
   outputFiles: UserFile[]
   activeRunCount: number
   canExport?: boolean
@@ -42,14 +47,28 @@ const scrollRef = ref<HTMLElement | null>(null)
 const uploadingFileCount = ref(0)
 
 const filesUploading = computed(() => uploadingFileCount.value > 0)
-const canSend = computed(() => props.connected && !props.sending && !filesUploading.value && draft.value.trim().length > 0)
-const canStop = computed(() => props.runId !== null && ['pending', 'queued', 'running'].includes(props.runStatus))
+const hasDraftOrFile = computed(() => draft.value.trim().length > 0 || props.attachedFiles.length > 0)
+const canSend = computed(() => props.connected && !props.sending && !filesUploading.value && hasDraftOrFile.value)
+const canStop = computed(() => props.runId !== null && ['queued', 'running'].includes(props.runStatus))
+const isLongJob = computed(() => props.runTaskKind === 'long_job' || props.runnerName === 'daoban_job')
+const jobElapsedLabel = computed(() => {
+  const seconds = Math.max(0, Math.floor(props.runDurationSeconds ?? 0))
+  const minutes = Math.floor(seconds / 60)
+  const remaining = seconds % 60
+  return minutes > 0 ? `${minutes}分${remaining}秒` : `${remaining}秒`
+})
+const jobStatusText = computed(() => {
+  const parts: string[] = [props.runStatus || 'queued']
+  if (props.runPhase) {
+    parts.push(props.runPhase)
+  }
+  parts.push(`已运行 ${jobElapsedLabel.value}`)
+  return parts.join(' · ')
+})
+const jobProgressText = computed(() => props.runProgressMessage || props.runStatusMessage)
 
 function send() {
   const content = draft.value.trim()
-  if (!content) {
-    return
-  }
   if (filesUploading.value) {
     ElMessage.warning('文件仍在上传中，请稍后再发送')
     return
@@ -139,12 +158,28 @@ watch(
         show-icon
         :closable="false"
       />
-      <div v-if="sending" class="response-status">
+      <div v-if="sending && isLongJob" class="response-status">
+        <strong>{{ jobStatusText }}</strong>
+        <span v-if="jobProgressText"> {{ jobProgressText }}</span>
+      </div>
+      <div v-if="sending && !isLongJob" class="response-status">
         <template v-if="runId">Agent 正在响应<template v-if="activeRunCount > 1">（{{ activeRunCount }} 个任务进行中）</template></template>
         <template v-else>正在发送消息</template>
       </div>
-      <div v-else-if="runStatusMessage" class="response-status">
+      <div v-if="!sending && runStatusMessage" class="response-status">
         {{ runStatusMessage }}
+      </div>
+      <div v-if="outputFiles.length" class="job-output-files">
+        <el-button
+          v-for="file in outputFiles"
+          :key="file.id"
+          link
+          type="primary"
+          :icon="Download"
+          @click="downloadFile(file)"
+        >
+          {{ file.original_name }} ({{ formatFileSize(file.file_size) }})
+        </el-button>
       </div>
       <div class="attachment-row">
         <FileUploader
@@ -294,6 +329,7 @@ p {
 
 .composer-error,
 .response-status,
+.job-output-files,
 .attachment-row {
   grid-column: 1 / -1;
 }
@@ -325,6 +361,7 @@ p {
 }
 
 .attachment-row,
+.job-output-files,
 .composer-actions {
   display: flex;
   flex-wrap: wrap;

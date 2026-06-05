@@ -17,6 +17,8 @@ DEFAULT_AGENTS = [
         "risk_level": AgentRiskLevel.medium,
         "support_files": True,
         "support_images": True,
+        "workspace_path": "/home/cy/.openclaw/workspace",
+        "execution_mode": "chat",
     },
     {
         "code": "mysql_analysis",
@@ -28,6 +30,8 @@ DEFAULT_AGENTS = [
         "risk_level": AgentRiskLevel.high,
         "support_files": False,
         "support_images": False,
+        "workspace_path": "/home/cy/.openclaw/workspace-huizong-ceshi",
+        "execution_mode": "auto",
     },
     {
         "code": "ppt_generation",
@@ -39,6 +43,8 @@ DEFAULT_AGENTS = [
         "risk_level": AgentRiskLevel.medium,
         "support_files": True,
         "support_images": True,
+        "workspace_path": "/home/cy/.openclaw/workspace",
+        "execution_mode": "auto",
     },
     {
         "code": "image_daoban",
@@ -50,6 +56,8 @@ DEFAULT_AGENTS = [
         "risk_level": AgentRiskLevel.medium,
         "support_files": True,
         "support_images": True,
+        "workspace_path": "/home/cy/.openclaw/workspace-image-daoban",
+        "execution_mode": "job",
     },
     {
         "code": "spider_1688",
@@ -61,6 +69,8 @@ DEFAULT_AGENTS = [
         "risk_level": AgentRiskLevel.high,
         "support_files": False,
         "support_images": False,
+        "workspace_path": "/home/cy/.openclaw/workspace-spider",
+        "execution_mode": "auto",
     },
     {
         "code": "xingzheng",
@@ -72,6 +82,8 @@ DEFAULT_AGENTS = [
         "risk_level": AgentRiskLevel.medium,
         "support_files": True,
         "support_images": True,
+        "workspace_path": "/home/cy/.openclaw/workspace-xingzheng_a",
+        "execution_mode": "auto",
     },
 ]
 

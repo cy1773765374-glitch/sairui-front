@@ -90,6 +90,19 @@ def _is_relative_to(path: Path, root: Path) -> bool:
         return False
 
 
+def _allowed_output_roots(user_id: int) -> list[Path]:
+    settings = get_settings()
+    roots = [(_resolve_root(settings.user_output_root) / str(user_id)).resolve()]
+    daoban_root = _resolve_root(settings.openclaw_daoban_output_root)
+    if daoban_root not in roots:
+        roots.append(daoban_root)
+    return roots
+
+
+def _is_under_any(path: Path, roots: list[Path]) -> bool:
+    return any(_is_relative_to(path, root) for root in roots)
+
+
 def _safe_filename(filename: str) -> str:
     name = Path(filename or "upload").name
     safe = SAFE_FILENAME_RE.sub("_", name).strip(" .")
@@ -420,13 +433,14 @@ def get_downloadable_file(db: Session, current_user: User, file_id: int) -> tupl
     settings = get_settings()
     if file.purpose == FilePurpose.upload:
         root = _resolve_root(settings.user_upload_root)
+        stored_path = Path(file.stored_path).expanduser().resolve()
+        if not _is_relative_to(stored_path, root) or not stored_path.is_file():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
     elif file.purpose == FilePurpose.output:
-        root = _resolve_root(settings.user_output_root)
+        stored_path = Path(file.stored_path).expanduser().resolve()
+        if not _is_under_any(stored_path, _allowed_output_roots(file.user_id)) or not stored_path.is_file():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
     else:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
-
-    stored_path = Path(file.stored_path).expanduser().resolve()
-    if not _is_relative_to(stored_path, root) or not stored_path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
 
     return file, stored_path
@@ -481,10 +495,9 @@ def register_output_files(db: Session, user_id: int, output_dir: str | None) -> 
         return []
 
     settings = get_settings()
-    root = _resolve_root(settings.user_output_root)
-    user_root = (root / str(user_id)).resolve()
     directory = Path(output_dir).expanduser().resolve()
-    if not _is_relative_to(directory, user_root) or not directory.is_dir():
+    allowed_roots = _allowed_output_roots(user_id)
+    if not _is_under_any(directory, allowed_roots) or not directory.is_dir():
         return []
 
     existing_paths = set(
@@ -500,7 +513,7 @@ def register_output_files(db: Session, user_id: int, output_dir: str | None) -> 
         if not path.is_file():
             continue
         resolved = path.resolve()
-        if not _is_relative_to(resolved, user_root) or str(resolved) in existing_paths:
+        if not _is_under_any(resolved, allowed_roots) or str(resolved) in existing_paths:
             continue
         ext = _extension(resolved.name)
         if ext not in ALLOWED_EXTENSIONS:
@@ -530,10 +543,9 @@ def list_output_files_for_dir(db: Session, user_id: int, output_dir: str | None)
         return []
 
     settings = get_settings()
-    root = _resolve_root(settings.user_output_root)
-    user_root = (root / str(user_id)).resolve()
     directory = Path(output_dir).expanduser().resolve()
-    if not _is_relative_to(directory, user_root):
+    allowed_roots = _allowed_output_roots(user_id)
+    if not _is_under_any(directory, allowed_roots):
         return []
 
     files = db.scalars(

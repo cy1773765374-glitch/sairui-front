@@ -16,18 +16,27 @@ from app.schemas.message import WebSocketCancelRunMessage, WebSocketUserMessage
 from app.services.agent_service import user_can_access_agent
 from app.services.auth_service import get_user_by_id
 from app.services.conversation_service import require_conversation_for_user, save_message
-from app.services.daoban_service import is_daoban_agent, require_daoban_pdf, sync_daoban_files_to_workspace
+from app.services.daoban_service import is_pdf_file
 from app.services.file_service import files_to_gateway_payload, validate_and_bind_upload_files
 from app.services.gateway_session import build_gateway_session_identity, normalize_client_message_id
+from app.services.pending_task_service import (
+    cancel_pending_task,
+    consume_pending_task,
+    save_pending_files,
+    save_pending_text,
+)
 from app.services.run_service import (
     create_task_run,
     get_task_run_by_client_message,
     get_task_run_detail,
-    mark_task_run_failed,
+    mark_task_run_success,
     request_task_run_cancel,
+    upsert_assistant_message_for_run,
 )
+from app.services.task_classifier import DAOBAN_TASK_TYPE, MemoryAction, TaskKind, classify_task
 from app.services.task_executor import start_chat_run
 from app.services.task_queue import task_queue
+from app.services.workspace_service import resolve_agent_workspace
 from app.services.ws_connection_manager import connection_manager
 
 router = APIRouter(tags=["ws-chat"])
@@ -218,7 +227,6 @@ async def chat_websocket(
                     )
                     continue
 
-                daoban_agent = is_daoban_agent(agent)
                 try:
                     upload_files = validate_and_bind_upload_files(
                         db,
@@ -226,8 +234,6 @@ async def chat_websocket(
                         conversation.id,
                         inbound_message.file_ids,
                     )
-                    if daoban_agent:
-                        require_daoban_pdf(upload_files)
                     gateway_files = files_to_gateway_payload(upload_files)
                     logger.info(
                         "[chat-send] user_id=%s conversation_id=%s agent=%s file_ids=%s",
@@ -254,6 +260,36 @@ async def chat_websocket(
                     )
                     continue
 
+                if not inbound_message.content.strip() and not upload_files:
+                    await send_json(
+                        {
+                            "type": "error",
+                            "message": "请输入消息或上传文件。",
+                            "conversation_id": conversation.id,
+                            "client_message_id": client_message_id,
+                        }
+                    )
+                    continue
+
+                classification = classify_task(
+                    db,
+                    user=current_user,
+                    agent=agent,
+                    conversation_id=conversation.id,
+                    content=inbound_message.content,
+                    files=upload_files,
+                )
+                workspace_path = str(resolve_agent_workspace(agent))
+                effective_content = classification.effective_content
+                if effective_content is None:
+                    effective_content = inbound_message.content.strip()
+                effective_file_ids = classification.effective_file_ids
+                if effective_file_ids is None:
+                    effective_file_ids = [file.id for file in upload_files]
+                run_type = "job" if classification.task_kind == TaskKind.long_job else "chat"
+                if classification.task_kind == TaskKind.pending_input:
+                    run_type = "pending_input"
+
                 provisional_identity = build_gateway_session_identity(
                     current_user,
                     agent,
@@ -266,20 +302,30 @@ async def chat_websocket(
                     current_user=current_user,
                     agent=agent,
                     conversation_id=conversation.id,
-                    input_text=inbound_message.content,
-                    run_type="chat",
+                    input_text=effective_content,
+                    run_type=run_type,
                     priority=100,
                     client_message_id=provisional_identity.client_message_id,
                     gateway_session_key=provisional_identity.session_key,
                     idempotency_key=provisional_identity.idempotency_key,
+                    task_kind=classification.task_kind.value,
+                    runner_name=classification.runner,
+                    workspace_path=workspace_path,
                     raw_payload={
                         "type": "user_message",
                         "content": inbound_message.content,
                         "file_ids": [file.id for file in upload_files],
+                        "effective_content": effective_content,
+                        "effective_file_ids": effective_file_ids,
                         "files": gateway_files,
                         "channel": provisional_identity.channel,
                         "agent_code": provisional_identity.agent_code,
                         "openclaw_agent_id": provisional_identity.openclaw_agent_id,
+                        "workspace_path": workspace_path,
+                        "task_kind": classification.task_kind.value,
+                        "runner_name": classification.runner,
+                        "classification_reason": classification.reason,
+                        "selected_pending_file_id": classification.selected_pending_file_id,
                         "conversation_id": conversation.id,
                         "client_message_id": provisional_identity.client_message_id,
                         "gateway_session_key": provisional_identity.session_key,
@@ -299,50 +345,25 @@ async def chat_websocket(
                 task_run.raw_payload = {
                     **(task_run.raw_payload or {}),
                     **identity.model_dump(),
+                    "workspace_path": workspace_path,
+                    "task_kind": classification.task_kind.value,
+                    "runner_name": classification.runner,
+                    "classification_reason": classification.reason,
                     "status": "queued",
                 }
-                if daoban_agent:
-                    try:
-                        gateway_files, daoban_payload = sync_daoban_files_to_workspace(
-                            db,
-                            run=task_run,
-                            agent=agent,
-                            content=inbound_message.content,
-                            files=upload_files,
-                        )
-                    except HTTPException as exc:
-                        db.rollback()
-                        detail, code, invalid_file_ids = _http_exception_detail(
-                            exc,
-                            fallback_file_ids=inbound_message.file_ids,
-                        )
-                        task_run = db.get(type(task_run), task_run.id) or task_run
-                        task_run = mark_task_run_failed(db, task_run, detail)
-                        await send_json(
-                            {
-                                "type": "error",
-                                "code": code,
-                                "message": detail,
-                                "invalid_file_ids": invalid_file_ids,
-                                "conversation_id": conversation.id,
-                                "run_id": task_run.id,
-                                "client_message_id": client_message_id,
-                            }
-                        )
-                        continue
-                    task_run.raw_payload = {
-                        **(task_run.raw_payload or {}),
-                        **daoban_payload,
-                        "status": "queued",
-                    }
                 db.commit()
                 db.refresh(task_run)
 
+                visible_user_content = inbound_message.content.strip()
+                if not visible_user_content and upload_files:
+                    visible_user_content = "[仅上传文件]"
                 message_raw_payload = {
                     **(task_run.raw_payload or {}),
                     "type": "user_message",
                     "content": inbound_message.content,
                     "file_ids": inbound_message.file_ids,
+                    "effective_content": effective_content,
+                    "effective_file_ids": effective_file_ids,
                     "client_message_id": identity.client_message_id,
                     "conversation_id": conversation.id,
                     "run_id": task_run.id,
@@ -351,11 +372,11 @@ async def chat_websocket(
                     "gateway_session_key": identity.session_key,
                     "idempotency_key": identity.idempotency_key,
                 }
-                save_message(
+                user_message = save_message(
                     db,
                     conversation,
                     MessageRole.user,
-                    inbound_message.content,
+                    visible_user_content,
                     raw_payload=message_raw_payload,
                     run_id=task_run.id,
                 )
@@ -374,17 +395,92 @@ async def chat_websocket(
                     {
                         "type": "user_message_ack",
                         **run_event_context(task_run, identity),
-                        "status": "queued",
+                        "status": "success" if classification.task_kind == TaskKind.pending_input else "queued",
+                        "task_kind": classification.task_kind.value,
+                        "runner_name": classification.runner,
                     }
                 )
+
+                if classification.task_kind == TaskKind.pending_input:
+                    if classification.memory_action == MemoryAction.save_pdf:
+                        pdf_file_ids = [file.id for file in upload_files if is_pdf_file(file)]
+                        save_pending_files(
+                            db,
+                            user=current_user,
+                            conversation_id=conversation.id,
+                            agent=agent,
+                            task_type=DAOBAN_TASK_TYPE,
+                            file_ids=pdf_file_ids,
+                            source_message_id=user_message.id,
+                        )
+                    elif classification.memory_action == MemoryAction.save_text:
+                        save_pending_text(
+                            db,
+                            user=current_user,
+                            conversation_id=conversation.id,
+                            agent=agent,
+                            task_type=DAOBAN_TASK_TYPE,
+                            text_value=effective_content,
+                            source_message_id=user_message.id,
+                        )
+                    elif classification.memory_action == MemoryAction.clear_pending:
+                        cancel_pending_task(
+                            db,
+                            user_id=current_user.id,
+                            conversation_id=conversation.id,
+                            agent_id=agent.id,
+                            task_type=DAOBAN_TASK_TYPE,
+                        )
+
+                    response_message = classification.response_message or "已记录当前输入。"
+                    task_run.raw_payload = {
+                        **(task_run.raw_payload or {}),
+                        "status": "success",
+                        "pending_input": True,
+                        "response_message": response_message,
+                    }
+                    assistant_message = upsert_assistant_message_for_run(
+                        db,
+                        run=task_run,
+                        conversation=conversation,
+                        content=response_message,
+                        raw_payload_patch=task_run.raw_payload,
+                    )
+                    task_run = db.get(type(task_run), task_run.id) or task_run
+                    task_run = mark_task_run_success(db, task_run, output_text=response_message)
+                    await send_json(
+                        {
+                            "type": "run_status",
+                            **run_event_context(task_run, identity),
+                            "status": task_run.status.value,
+                            "message": response_message,
+                            "task_kind": classification.task_kind.value,
+                            "runner_name": classification.runner,
+                            "output_files": [],
+                        }
+                    )
+                    await send_json(
+                        {
+                            "type": "assistant_done",
+                            "conversation_id": conversation.id,
+                            "message_id": assistant_message.id,
+                            "run_id": task_run.id,
+                            "client_message_id": identity.client_message_id,
+                            "output_files": [],
+                        }
+                    )
+                    continue
+
+                if classification.memory_action == MemoryAction.consume_pending:
+                    consume_pending_task(db, classification.pending_task, run_id=task_run.id)
 
                 queue_status = await start_chat_run(
                     run_id=task_run.id,
                     user_id=current_user.id,
                     agent_id=agent.id,
                     conversation_id=conversation.id,
-                    content=inbound_message.content,
-                    file_ids=inbound_message.file_ids,
+                    content=effective_content,
+                    file_ids=effective_file_ids,
                     gateway_files=gateway_files,
                 )
                 await send_json(

@@ -75,6 +75,8 @@ def scan_stale_task_runs() -> int:
                     continue
 
             if run.status == TaskRunStatus.queued:
+                if run.task_kind == "long_job":
+                    continue
                 queued_at = _as_aware(run.queued_at) or _as_aware(run.created_at)
                 if (
                     settings.task_queue_timeout_seconds

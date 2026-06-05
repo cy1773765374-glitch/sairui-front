@@ -5,6 +5,8 @@ from app.models.file import File
 from app.models.favorite_agent import UserFavoriteAgent
 from app.models.identity_binding import IdentityBinding
 from app.models.message import Message
+from app.models.pending_task_input import PendingTaskInput
+from app.models.run_event import RunEvent
 from app.models.task_run import TaskRun
 from app.models.user import User
 
@@ -17,6 +19,8 @@ __all__ = [
     "UserFavoriteAgent",
     "IdentityBinding",
     "Message",
+    "PendingTaskInput",
+    "RunEvent",
     "TaskRun",
     "User",
 ]
