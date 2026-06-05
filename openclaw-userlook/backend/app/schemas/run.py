@@ -24,6 +24,12 @@ class TaskRunRead(BaseModel):
     output_files_json: Any | None = None
     raw_payload: Any | None = None
     raw_payload_summary: Any | None = None
+    task_kind: str | None = None
+    runner_name: str | None = None
+    workspace_path: str | None = None
+    phase: str | None = None
+    progress_message: str | None = None
+    duration_seconds: int | None = None
     client_message_id: str | None = None
     gateway_session_key: str | None = None
     idempotency_key: str | None = None

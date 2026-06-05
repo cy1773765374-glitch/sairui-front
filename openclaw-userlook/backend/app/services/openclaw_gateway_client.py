@@ -22,6 +22,7 @@ from app.models.agent import Agent
 from app.models.conversation import Conversation
 from app.models.user import User
 from app.services.daoban_service import build_daoban_gateway_message, is_daoban_agent
+from app.services.workspace_service import resolve_agent_workspace
 from app.services.gateway_connection_pool import GatewayConnectionPool
 from app.services.gateway_session import GatewaySessionIdentity, build_gateway_session_identity
 
@@ -886,6 +887,7 @@ class OpenClawGatewayClient:
             f"source_session_key={conversation.session_key}",
             f"gateway_session_key={gateway_session_key}",
             f"client_message_id={client_message_id}",
+            f"workspace_path={resolve_agent_workspace(agent)}",
         ]
         if run_id is not None:
             context_lines.append(f"run_id={run_id}")

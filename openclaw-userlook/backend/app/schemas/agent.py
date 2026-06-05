@@ -17,6 +17,8 @@ class AgentRead(BaseModel):
     risk_level: AgentRiskLevel
     support_files: bool
     support_images: bool
+    workspace_path: str | None = None
+    execution_mode: str | None = None
     created_at: datetime
     updated_at: datetime
 

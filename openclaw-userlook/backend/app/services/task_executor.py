@@ -18,6 +18,8 @@ from app.services.daoban_service import is_daoban_agent
 from app.services.file_service import list_gateway_upload_files, register_output_files
 from app.services.gateway_connection_pool import get_gateway_pool
 from app.services.openclaw_adapter import OpenClawAdapter, OpenClawAdapterEvent
+from app.services.runners.base import RunnerInput
+from app.services.runners.router import AgentRunnerRouter
 from app.services.run_service import (
     mark_task_run_cancelled,
     mark_task_run_failed,
@@ -30,6 +32,7 @@ from app.services.run_service import (
     upsert_assistant_message_for_run,
 )
 from app.services.task_queue import QueueStatus, task_queue
+from app.services.workspace_service import resolve_agent_workspace
 from app.services.ws_connection_manager import connection_manager
 
 HEARTBEAT_INTERVAL_SECONDS = 5
@@ -170,6 +173,50 @@ async def start_chat_run(
         task_func,
         agent_id=agent_id,
         user_id=user_id,
+    )
+
+
+async def execute_chat_run(
+    *,
+    run_id: int,
+    user_id: int,
+    agent_id: int,
+    conversation_id: int,
+    content: str,
+    file_ids: list[int],
+    gateway_files: list[dict[str, object]],
+    cancel_event: asyncio.Event,
+) -> None:
+    with SessionLocal() as db:
+        run = db.get(TaskRun, run_id)
+        agent = db.get(Agent, agent_id)
+        if run is None or agent is None:
+            return
+        runner = AgentRunnerRouter().select_runner(run=run, agent=agent)
+
+    if runner.name == "gateway_chat":
+        await _execute_gateway_chat_run(
+            run_id=run_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            content=content,
+            file_ids=file_ids,
+            gateway_files=gateway_files,
+            cancel_event=cancel_event,
+        )
+        return
+
+    await runner.run(
+        RunnerInput(
+            run_id=run_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            content=content,
+            file_ids=file_ids,
+        ),
+        cancel_event,
     )
 
 
@@ -334,7 +381,7 @@ async def _handle_terminal_error_event(
     return run
 
 
-async def execute_chat_run(
+async def _execute_gateway_chat_run(
     *,
     run_id: int,
     user_id: int,
@@ -379,6 +426,18 @@ async def execute_chat_run(
                     **_run_event_context(run, agent),
                 )
                 return
+
+            workspace_path = str(resolve_agent_workspace(agent))
+            run.workspace_path = run.workspace_path or workspace_path
+            run.task_kind = run.task_kind or "short_chat"
+            run.runner_name = run.runner_name or "gateway_chat"
+            run.raw_payload = {
+                **(run.raw_payload or {}),
+                "workspace_path": workspace_path,
+                "task_kind": run.task_kind,
+                "runner_name": run.runner_name,
+            }
+            db.commit()
 
             daoban_agent = is_daoban_agent(agent)
             try:

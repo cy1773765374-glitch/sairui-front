@@ -29,6 +29,8 @@ type ServerWsMessage =
       agent_code?: string | null
       openclaw_agent_id?: string | null
       gateway_session_key?: string | null
+      task_kind?: string | null
+      runner_name?: string | null
       status: TaskRunStatus | 'queued'
     }
   | {
@@ -58,6 +60,11 @@ type ServerWsMessage =
       queue_status?: 'queued' | 'immediate'
       status: TaskRunStatus | 'done' | 'idle'
       message?: string
+      task_kind?: string | null
+      runner_name?: string | null
+      phase?: string | null
+      progress_message?: string | null
+      duration_seconds?: number | null
       output_files?: UserFile[]
     }
   | { type: 'active_run'; conversation_id?: number; client_message_id?: string | null; message?: string; active_run: TaskRun | null }
@@ -80,6 +87,11 @@ interface ConversationRuntimeState {
   currentClientMessageId: string | null
   currentRunStatus: TaskRunStatus | ''
   currentRunStatusMessage: string
+  currentTaskKind: string | null
+  currentRunnerName: string | null
+  currentRunPhase: string | null
+  currentRunProgressMessage: string | null
+  currentRunDurationSeconds: number | null
 }
 
 interface ConversationAgentGroup {
@@ -217,6 +229,41 @@ const currentRunStatusMessage = computed({
   },
 })
 
+const currentTaskKind = computed({
+  get: () => activeRuntime.value.currentTaskKind,
+  set: (value: string | null) => {
+    activeRuntime.value.currentTaskKind = value
+  },
+})
+
+const currentRunnerName = computed({
+  get: () => activeRuntime.value.currentRunnerName,
+  set: (value: string | null) => {
+    activeRuntime.value.currentRunnerName = value
+  },
+})
+
+const currentRunPhase = computed({
+  get: () => activeRuntime.value.currentRunPhase,
+  set: (value: string | null) => {
+    activeRuntime.value.currentRunPhase = value
+  },
+})
+
+const currentRunProgressMessage = computed({
+  get: () => activeRuntime.value.currentRunProgressMessage,
+  set: (value: string | null) => {
+    activeRuntime.value.currentRunProgressMessage = value
+  },
+})
+
+const currentRunDurationSeconds = computed({
+  get: () => activeRuntime.value.currentRunDurationSeconds,
+  set: (value: number | null) => {
+    activeRuntime.value.currentRunDurationSeconds = value
+  },
+})
+
 const activeRunCount = computed(() => activeRuntime.value.activeRunIds.length)
 
 function createRuntimeState(): ConversationRuntimeState {
@@ -229,6 +276,11 @@ function createRuntimeState(): ConversationRuntimeState {
     currentClientMessageId: null,
     currentRunStatus: '',
     currentRunStatusMessage: '',
+    currentTaskKind: null,
+    currentRunnerName: null,
+    currentRunPhase: null,
+    currentRunProgressMessage: null,
+    currentRunDurationSeconds: null,
   }
 }
 
@@ -295,6 +347,11 @@ function applyRunState(run: TaskRun | null) {
   runtime.currentClientMessageId = run?.client_message_id ?? runtime.currentClientMessageId
   runtime.currentRunStatus = run?.status ?? ''
   runtime.currentRunStatusMessage = run?.error_message ?? ''
+  runtime.currentTaskKind = run?.task_kind ?? null
+  runtime.currentRunnerName = run?.runner_name ?? null
+  runtime.currentRunPhase = run?.phase ?? null
+  runtime.currentRunProgressMessage = run?.progress_message ?? null
+  runtime.currentRunDurationSeconds = run?.duration_seconds ?? null
   runtime.outputFiles = run?.output_files ?? []
   if (run?.id && isActiveRunStatus(run.status)) {
     runtime.activeRunIds = Array.from(new Set([...runtime.activeRunIds, run.id]))
@@ -654,6 +711,8 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       runtime.currentClientMessageId = payload.client_message_id ?? runtime.currentClientMessageId
       runtime.currentRunStatus = payload.status === 'queued' ? 'queued' : payload.status
       runtime.currentRunStatusMessage = ''
+      runtime.currentTaskKind = payload.task_kind ?? runtime.currentTaskKind
+      runtime.currentRunnerName = payload.runner_name ?? runtime.currentRunnerName
       if (payload.client_message_id) {
         pendingDraftClearers.get(payload.client_message_id)?.()
         pendingDraftClearers.delete(payload.client_message_id)
@@ -719,6 +778,11 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       currentRunStatus.value =
         payload.status === 'done' ? 'success' : payload.status === 'idle' ? '' : payload.status
       currentRunStatusMessage.value = payload.message ?? ''
+      currentTaskKind.value = payload.task_kind ?? currentTaskKind.value
+      currentRunnerName.value = payload.runner_name ?? currentRunnerName.value
+      currentRunPhase.value = payload.phase ?? currentRunPhase.value
+      currentRunProgressMessage.value = payload.progress_message ?? payload.message ?? currentRunProgressMessage.value
+      currentRunDurationSeconds.value = payload.duration_seconds ?? currentRunDurationSeconds.value
       if (payload.output_files) {
         outputFiles.value = payload.output_files
       }
@@ -1146,13 +1210,18 @@ async function sendMessage(content: string, fileIds: number[], clearDraft: () =>
   currentRunId.value = null
   currentClientMessageId.value = clientMessageId
   currentRunStatus.value = ''
+  currentTaskKind.value = null
+  currentRunnerName.value = null
+  currentRunPhase.value = null
+  currentRunProgressMessage.value = null
+  currentRunDurationSeconds.value = null
   currentRunStatusMessage.value = '正在发送消息'
   getMessagesForConversation(conversation.value.id).push({
     id: `user-${clientMessageId}`,
     conversation_id: conversation.value.id,
     run_id: null,
     role: 'user',
-    content,
+    content: content || '[仅上传文件]',
     created_at: new Date().toISOString(),
     raw_payload: { file_ids: fileIds, client_message_id: clientMessageId },
     streaming: false,
@@ -1438,6 +1507,11 @@ onBeforeUnmount(() => {
         :run-id="currentRunId"
         :run-status="currentRunStatus"
         :run-status-message="currentRunStatusMessage"
+        :run-task-kind="currentTaskKind"
+        :runner-name="currentRunnerName"
+        :run-phase="currentRunPhase"
+        :run-progress-message="currentRunProgressMessage"
+        :run-duration-seconds="currentRunDurationSeconds"
         :output-files="outputFiles"
         :active-run-count="activeRunCount"
         :can-export="!!conversation"

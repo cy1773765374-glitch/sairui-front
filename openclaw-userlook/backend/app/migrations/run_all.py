@@ -9,6 +9,7 @@ from app.migrations.phase13_1_uiux import run_migration as run_phase13_1_migrati
 from app.migrations.phase13_2_uiux import run_migration as run_phase13_2_migration
 from app.migrations.phase13_3_upload_files import run_migration as run_phase13_3_migration
 from app.migrations.phase13_4_daoban_file_chain import run_migration as run_phase13_4_migration
+from app.migrations.phase14_workspace_job_runner import run_migration as run_phase14_migration
 
 
 MIGRATIONS: list[tuple[str, Callable[[], None]]] = [
@@ -19,6 +20,7 @@ MIGRATIONS: list[tuple[str, Callable[[], None]]] = [
     ("phase13_2_uiux", run_phase13_2_migration),
     ("phase13_3_upload_files", run_phase13_3_migration),
     ("phase13_4_daoban_file_chain", run_phase13_4_migration),
+    ("phase14_workspace_job_runner", run_phase14_migration),
 ]
 
 

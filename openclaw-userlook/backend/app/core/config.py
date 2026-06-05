@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     task_assume_done_after_text_silence: bool = Field(default=True, alias="TASK_ASSUME_DONE_AFTER_TEXT_SILENCE")
     task_job_timeout_seconds: int = Field(default=1800, alias="TASK_JOB_TIMEOUT_SECONDS")
     task_queue_timeout_seconds: int = Field(default=1800, alias="TASK_QUEUE_TIMEOUT_SECONDS")
+    task_pending_context_ttl_hours: int = Field(default=24, alias="TASK_PENDING_CONTEXT_TTL_HOURS")
     task_stale_running_minutes: int = Field(default=30, alias="TASK_STALE_RUNNING_MINUTES")
     task_watchdog_interval_seconds: int = Field(default=30, alias="TASK_WATCHDOG_INTERVAL_SECONDS")
     task_agent_concurrency: int = Field(default=1, alias="TASK_AGENT_CONCURRENCY")
@@ -74,6 +75,14 @@ class Settings(BaseSettings):
     openclaw_daoban_workspace: str = Field(
         default="/home/cy/.openclaw/workspace-image-daoban",
         alias="OPENCLAW_DAOBAN_WORKSPACE",
+    )
+    openclaw_daoban_output_root: str = Field(
+        default="/data/share/yaq/test",
+        alias="DAOBAN_OUTPUT_ROOT",
+    )
+    openclaw_default_workspace: str = Field(
+        default="/home/cy/.openclaw/workspace",
+        alias="OPENCLAW_DEFAULT_WORKSPACE",
     )
     max_upload_mb: int = Field(default=50, alias="MAX_UPLOAD_MB")
     cors_origins: list[str] = [

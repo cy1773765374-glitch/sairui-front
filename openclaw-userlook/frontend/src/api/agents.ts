@@ -14,6 +14,8 @@ export interface Agent {
   risk_level: AgentRiskLevel
   support_files: boolean
   support_images: boolean
+  workspace_path: string | null
+  execution_mode: string | null
   created_at: string
   updated_at: string
 }

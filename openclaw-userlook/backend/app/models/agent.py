@@ -42,6 +42,8 @@ class Agent(Base):
     )
     support_files: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     support_images: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    workspace_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    execution_mode: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
