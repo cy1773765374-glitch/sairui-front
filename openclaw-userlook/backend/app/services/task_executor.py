@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 
 from app.core.config import get_settings
@@ -12,7 +14,8 @@ from app.models.agent import Agent
 from app.models.conversation import Conversation
 from app.models.task_run import TERMINAL_RUN_STATUSES, TaskRun, TaskRunStatus
 from app.models.user import User
-from app.services.file_service import register_output_files
+from app.services.daoban_service import is_daoban_agent
+from app.services.file_service import list_gateway_upload_files, register_output_files
 from app.services.gateway_connection_pool import get_gateway_pool
 from app.services.openclaw_adapter import OpenClawAdapter, OpenClawAdapterEvent
 from app.services.run_service import (
@@ -34,6 +37,7 @@ OUTPUT_PERSIST_INTERVAL_SECONDS = 1
 OUTPUT_PERSIST_CHARS = 200
 TERMINAL_GATEWAY_STATUSES = {"success", "failed", "cancelled", "timeout"}
 ERROR_GATEWAY_STATUSES = {"failed", "cancelled", "timeout"}
+logger = logging.getLogger(__name__)
 
 
 def _utc_now() -> datetime:
@@ -66,6 +70,14 @@ def _run_event_context(run: TaskRun, agent: Agent | None = None) -> dict[str, st
         "openclaw_agent_id": agent.openclaw_agent_id if agent else raw_payload.get("openclaw_agent_id"),
         "gateway_session_key": run.gateway_session_key,
     }
+
+
+def _http_exception_message(exc: HTTPException) -> tuple[str, str]:
+    if isinstance(exc.detail, dict):
+        message = str(exc.detail.get("message") or exc.detail.get("detail") or "上传文件无效，请重新上传后再发送")
+        code = str(exc.detail.get("code") or "INVALID_FILE_RECORD")
+        return message, code
+    return str(exc.detail or "上传文件无效，请重新上传后再发送"), "INVALID_FILE_RECORD"
 
 
 async def _broadcast_run_status(
@@ -367,6 +379,57 @@ async def execute_chat_run(
                     **_run_event_context(run, agent),
                 )
                 return
+
+            daoban_agent = is_daoban_agent(agent)
+            try:
+                gateway_files = list_gateway_upload_files(
+                    db,
+                    user,
+                    file_ids,
+                    prefer_workspace_path=daoban_agent,
+                )
+            except HTTPException as exc:
+                message, code = _http_exception_message(exc)
+                run = mark_task_run_failed(db, run, message)
+                await connection_manager.broadcast_json(
+                    conversation_id,
+                    {
+                        "type": "error",
+                        "code": code,
+                        "conversation_id": conversation_id,
+                        "run_id": run.id,
+                        "client_message_id": run.client_message_id,
+                        "gateway_session_key": run.gateway_session_key,
+                        "message": message,
+                    },
+                )
+                await _broadcast_run_status(
+                    conversation_id,
+                    run_id=run.id,
+                    status_value=run.status.value,
+                    message=run.error_message,
+                    **_run_event_context(run, agent),
+                )
+                return
+
+            for file in gateway_files:
+                logger.info("[run-worker] run_id=%s file_id=%s path=%s", run.id, file.get("id"), file.get("path"))
+            if daoban_agent:
+                pdf_file = next(
+                    (
+                        file
+                        for file in gateway_files
+                        if str(file.get("mime_type") or "").lower() == "application/pdf"
+                        or str(file.get("file_type") or "").lower() == "pdf"
+                    ),
+                    None,
+                )
+                logger.info(
+                    "[daoban-worker] run_id=%s pdf_path=%s prompt=%s",
+                    run.id,
+                    (pdf_file or {}).get("path") or (pdf_file or {}).get("workspace_path"),
+                    content,
+                )
             if cancel_event.is_set() or run.cancel_requested:
                 run = mark_task_run_cancelled(db, run, "用户已停止生成")
                 await _broadcast_run_status(

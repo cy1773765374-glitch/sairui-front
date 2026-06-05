@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -22,11 +22,22 @@ def get_files(
 @router.post("/upload", response_model=FileUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_file(
     upload: UploadFile = File(...),
+    agent_code: str | None = Form(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> FileUploadResponse:
-    file = await save_upload_file(db, current_user, upload)
-    return FileUploadResponse(file_id=file.id, file=file)
+    file = await save_upload_file(db, current_user, upload, agent_code=agent_code)
+    return FileUploadResponse(
+        id=file.id,
+        file_id=file.id,
+        name=file.original_name,
+        original_name=file.original_name,
+        size=file.file_size,
+        mime_type=file.mime_type,
+        status=file.status,
+        workspace_path=file.workspace_path,
+        file=file,
+    )
 
 
 @router.get("/{file_id}/download")

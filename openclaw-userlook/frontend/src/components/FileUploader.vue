@@ -6,6 +6,10 @@ import axios from 'axios'
 
 import { formatFileSize, uploadFile, type UserFile } from '../api/files'
 
+const props = defineProps<{
+  agentCode?: string
+}>()
+
 const emit = defineEmits<{
   uploaded: [file: UserFile]
   uploadingChange: [uploading: boolean]
@@ -61,7 +65,7 @@ async function uploadWithApi(options: UploadRequestOptions) {
   activeUploadCount.value += 1
   emit('uploadingChange', true)
   try {
-    const response = await uploadFile(options.file)
+    const response = await uploadFile(options.file, props.agentCode)
     const realId = response.file?.id ?? response.file_id ?? response.id
     if (!realId) {
       throw new Error('missing uploaded file id')
@@ -69,7 +73,11 @@ async function uploadWithApi(options: UploadRequestOptions) {
     const uploadedFile: UserFile = {
       ...response.file,
       id: Number(realId),
+      original_name: response.file?.original_name ?? response.original_name ?? response.name ?? options.file.name,
+      file_size: response.file?.file_size ?? response.size ?? options.file.size,
       mime_type: response.file?.mime_type ?? options.file.type ?? null,
+      status: response.file?.status ?? response.status ?? 'ready',
+      workspace_path: response.file?.workspace_path ?? response.workspace_path ?? null,
     }
     emit('uploaded', uploadedFile)
     ElMessage.success(`已上传 ${uploadedFile.original_name} (${formatFileSize(uploadedFile.file_size)})`)

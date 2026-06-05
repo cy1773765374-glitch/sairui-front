@@ -71,6 +71,10 @@ class Settings(BaseSettings):
         default="/data/openclaw-userlook/outputs",
         alias="USER_OUTPUT_ROOT",
     )
+    openclaw_daoban_workspace: str = Field(
+        default="/home/cy/.openclaw/workspace-image-daoban",
+        alias="OPENCLAW_DAOBAN_WORKSPACE",
+    )
     max_upload_mb: int = Field(default=50, alias="MAX_UPLOAD_MB")
     cors_origins: list[str] = [
         "http://127.0.0.1:10010",
