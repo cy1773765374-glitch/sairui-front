@@ -108,11 +108,11 @@ cd /opt/openclaw-userlook/backend
 .venv/bin/python -m app.init_db
 ```
 
-从 Phase 10 升级到 Phase 11 的已有数据库，还需要执行幂等迁移脚本补齐任务生命周期字段和 `messages.run_id`：
+已有数据库需要执行幂等迁移脚本补齐历史阶段新增字段。迁移可以重复执行，不会删除业务数据：
 
 ```bash
 cd /opt/openclaw-userlook/backend
-.venv/bin/python -m app.migrations.phase11_task_run_lifecycle
+.venv/bin/python -m app.migrations.run_all
 ```
 
 ## 5. 创建默认 admin

@@ -21,6 +21,7 @@ from app.migrations.phase12_3_session_isolation import run_migration as run_phas
 from app.migrations.phase13_1_uiux import run_migration as run_phase13_1_migration
 from app.migrations.phase13_2_uiux import run_migration as run_phase13_2_migration
 from app.migrations.phase13_3_upload_files import run_migration as run_phase13_3_migration
+from app.migrations.phase13_4_daoban_file_chain import run_migration as run_phase13_4_migration
 from app.services.gateway_connection_pool import GatewayConnectionPool, set_gateway_pool
 from app.services.run_watchdog import watchdog_loop
 from app.services.task_queue import task_queue
@@ -36,6 +37,7 @@ async def lifespan(app: FastAPI):
     run_phase13_1_migration()
     run_phase13_2_migration()
     run_phase13_3_migration()
+    run_phase13_4_migration()
     pool = None
     if settings.gateway_pool_enabled:
         pool = GatewayConnectionPool(settings)
