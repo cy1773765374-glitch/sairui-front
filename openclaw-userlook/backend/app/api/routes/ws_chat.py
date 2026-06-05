@@ -142,6 +142,10 @@ async def chat_websocket(
         try:
             while True:
                 raw_message = await websocket.receive_json()
+                # The WebSocket keeps one SQLAlchemy Session for a long time. End any
+                # old read transaction so MySQL does not serve a stale REPEATABLE READ
+                # snapshot that misses files uploaded over a separate HTTP request.
+                db.rollback()
                 message_type = raw_message.get("type") if isinstance(raw_message, dict) else None
 
                 if message_type == "cancel_run":
