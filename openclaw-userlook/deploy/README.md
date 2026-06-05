@@ -14,6 +14,7 @@ deploy/
 ├── scripts/
 │   ├── install_backend.sh
 │   ├── build_frontend.sh
+│   ├── deploy_openclaw_userlook.sh
 │   ├── start_backend.sh
 │   └── check_service.sh
 └── README.md
@@ -26,6 +27,23 @@ deploy/
 ```
 
 如果实际路径不同，需要同步修改 Nginx 和 systemd 模板中的路径。
+
+## 一键部署脚本
+
+`deploy/scripts/deploy_openclaw_userlook.sh` 会完成拉取代码、同步到运行目录、安装依赖、执行幂等迁移、构建前端和重启服务。默认从 `/opt/sairui-front/openclaw-userlook` 同步到 `/opt/openclaw-userlook`，并保留 `.venv`、`node_modules`、`.env` 和上传存储目录。
+
+```bash
+REPO_DIR=/opt/sairui-front \
+APP_DIR=/opt/openclaw-userlook \
+BRANCH=main \
+bash /opt/sairui-front/openclaw-userlook/deploy/scripts/deploy_openclaw_userlook.sh
+```
+
+如果刀版兼容提交尚未合入 `main`，先把 `BRANCH` 改成实际部署分支，例如：
+
+```bash
+BRANCH=phase-13.4-daoban-migration bash /opt/sairui-front/openclaw-userlook/deploy/scripts/deploy_openclaw_userlook.sh
+```
 
 ## 1. 创建 Python 虚拟环境
 
