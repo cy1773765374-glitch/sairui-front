@@ -12,7 +12,11 @@ from app.core.config import get_settings
 from app.core.database import Base
 from app.models.file import File, FilePurpose
 from app.models.user import User, UserRole, UserStatus
-from app.services.file_service import list_gateway_upload_files, validate_user_upload_file_ids
+from app.services.file_service import (
+    list_gateway_upload_files,
+    validate_and_bind_upload_files,
+    validate_user_upload_file_ids,
+)
 
 
 class FileServiceUploadValidationTest(unittest.TestCase):
@@ -54,8 +58,136 @@ class FileServiceUploadValidationTest(unittest.TestCase):
                 validate_user_upload_file_ids(db, user, [owned_file.id, other_file.id, 99])
 
             self.assertEqual(context.exception.status_code, 400)
-            self.assertEqual(context.exception.detail["code"], "INVALID_UPLOAD_FILES")
+            self.assertEqual(context.exception.detail["code"], "INVALID_FILE_RECORD")
             self.assertEqual(context.exception.detail["invalid_file_ids"], [other_file.id, 99])
+
+    def test_validate_and_bind_upload_files_binds_pending_file_to_conversation(self) -> None:
+        with tempfile.TemporaryDirectory() as upload_root:
+            with patch.dict(os.environ, {"USER_UPLOAD_ROOT": upload_root}):
+                get_settings.cache_clear()
+                try:
+                    stored_path = Path(upload_root) / "7" / "20260604" / "source.pdf"
+                    stored_path.parent.mkdir(parents=True)
+                    stored_path.write_bytes(b"pdf")
+
+                    with self.session_factory() as db:
+                        user, _ = self._seed_users(db)
+                        file = File(
+                            id=10,
+                            user_id=user.id,
+                            original_name="source.pdf",
+                            stored_path=str(stored_path),
+                            file_type="pdf",
+                            mime_type="application/pdf",
+                            file_size=3,
+                            purpose=FilePurpose.upload,
+                            status="ready",
+                        )
+                        db.add(file)
+                        db.commit()
+
+                        files = validate_and_bind_upload_files(db, user, 19, [file.id])
+
+                        self.assertEqual([item.id for item in files], [file.id])
+                        self.assertEqual(file.conversation_id, 19)
+                finally:
+                    get_settings.cache_clear()
+
+    def test_validate_and_bind_upload_files_rejects_cross_conversation_file(self) -> None:
+        with tempfile.TemporaryDirectory() as upload_root:
+            with patch.dict(os.environ, {"USER_UPLOAD_ROOT": upload_root}):
+                get_settings.cache_clear()
+                try:
+                    stored_path = Path(upload_root) / "7" / "20260604" / "source.pdf"
+                    stored_path.parent.mkdir(parents=True)
+                    stored_path.write_bytes(b"pdf")
+
+                    with self.session_factory() as db:
+                        user, _ = self._seed_users(db)
+                        file = File(
+                            id=10,
+                            user_id=user.id,
+                            conversation_id=18,
+                            original_name="source.pdf",
+                            stored_path=str(stored_path),
+                            file_type="pdf",
+                            mime_type="application/pdf",
+                            file_size=3,
+                            purpose=FilePurpose.upload,
+                            status="ready",
+                        )
+                        db.add(file)
+                        db.commit()
+
+                        with self.assertRaises(HTTPException) as context:
+                            validate_and_bind_upload_files(db, user, 19, [file.id])
+
+                        self.assertEqual(context.exception.status_code, 409)
+                        self.assertEqual(context.exception.detail["code"], "FILE_CONVERSATION_MISMATCH")
+                finally:
+                    get_settings.cache_clear()
+
+    def test_validate_and_bind_upload_files_rejects_missing_content(self) -> None:
+        with tempfile.TemporaryDirectory() as upload_root:
+            with patch.dict(os.environ, {"USER_UPLOAD_ROOT": upload_root}):
+                get_settings.cache_clear()
+                try:
+                    with self.session_factory() as db:
+                        user, _ = self._seed_users(db)
+                        file = File(
+                            id=10,
+                            user_id=user.id,
+                            original_name="source.pdf",
+                            stored_path=str(Path(upload_root) / "missing.pdf"),
+                            file_type="pdf",
+                            mime_type="application/pdf",
+                            file_size=3,
+                            purpose=FilePurpose.upload,
+                            status="ready",
+                        )
+                        db.add(file)
+                        db.commit()
+
+                        with self.assertRaises(HTTPException) as context:
+                            validate_and_bind_upload_files(db, user, 19, [file.id])
+
+                        self.assertEqual(context.exception.status_code, 410)
+                        self.assertEqual(context.exception.detail["code"], "FILE_CONTENT_MISSING")
+                finally:
+                    get_settings.cache_clear()
+
+    def test_validate_and_bind_upload_files_rejects_not_ready_status(self) -> None:
+        with tempfile.TemporaryDirectory() as upload_root:
+            with patch.dict(os.environ, {"USER_UPLOAD_ROOT": upload_root}):
+                get_settings.cache_clear()
+                try:
+                    stored_path = Path(upload_root) / "7" / "20260604" / "source.pdf"
+                    stored_path.parent.mkdir(parents=True)
+                    stored_path.write_bytes(b"pdf")
+
+                    with self.session_factory() as db:
+                        user, _ = self._seed_users(db)
+                        file = File(
+                            id=10,
+                            user_id=user.id,
+                            original_name="source.pdf",
+                            stored_path=str(stored_path),
+                            file_type="pdf",
+                            mime_type="application/pdf",
+                            file_size=3,
+                            purpose=FilePurpose.upload,
+                            status="processing",
+                        )
+                        db.add(file)
+                        db.commit()
+
+                        with self.assertRaises(HTTPException) as context:
+                            validate_and_bind_upload_files(db, user, 19, [file.id])
+
+                        self.assertEqual(context.exception.status_code, 409)
+                        self.assertEqual(context.exception.detail["code"], "FILE_NOT_READY")
+                finally:
+                    get_settings.cache_clear()
 
     def test_list_gateway_upload_files_uses_real_stored_path_and_mime_type(self) -> None:
         with tempfile.TemporaryDirectory() as upload_root:

@@ -179,6 +179,7 @@ curl -X POST http://127.0.0.1:10009/api/admin/agents/main/permissions ^
 - `DEFAULT_ADMIN_PASSWORD`
 - `USER_UPLOAD_ROOT`
 - `USER_OUTPUT_ROOT`
+- `OPENCLAW_DAOBAN_WORKSPACE`
 - `MAX_UPLOAD_MB`
 
 ## Chat Gateway
@@ -198,6 +199,8 @@ For short chat runs, if Gateway emits assistant text but does not send an explic
 If Gateway only emits connection health/tick frames and no assistant text, the backend marks the run `timeout` after `TASK_GATEWAY_FIRST_TOKEN_TIMEOUT_SECONDS` seconds. This prevents one silent Gateway call from occupying the Gateway concurrency slot for the full chat timeout.
 
 Gateway `chat.send` requests keep the root `params` compatible with Gateway's strict schema: `sessionKey`, `message`, `deliver`, `timeoutMs`, `idempotencyKey`, and optional `attachments`. Web context such as Agent code, OpenClaw Agent id, run id, conversation id, client message id, and output directory is carried in the message context prefix instead of unsupported root params. `OPENCLAW_GATEWAY_DELIVER=true` is the default so the backend asks Gateway to actually deliver the message to the target Agent. `GATEWAY_POOL_ENABLED=true` reuses authenticated Gateway WebSocket connections without multiplexing; one pooled connection serves one active `stream_chat` call at a time. The default effective chat concurrency is 10, bounded by `GATEWAY_POOL_MAX_SIZE`, `TASK_GLOBAL_CHAT_CONCURRENCY`, and the non-pool fallback `OPENCLAW_GATEWAY_MAX_CONCURRENCY`.
+
+For the knife-layout Agent (`image_daoban`, `image-daoban`, `daoban`, `workspace-image-daoban`, or `刀版合成`), uploaded PDFs are copied into `OPENCLAW_DAOBAN_WORKSPACE/data/input/userlook/run-{run_id}/` before the run is queued. `OPENCLAW_DAOBAN_WORKSPACE` must be writable by the backend and readable by OpenClaw Gateway; the Gateway request uses that `workspace_path` in both attachments and the message body.
 
 To inspect the live Gateway protocol without exposing credentials, run the probe script. It reuses the normal Gateway handshake, redacts token/password/signature/private-key-like fields, saves the outbound request plus the first 50 inbound frames, and exits non-zero when no assistant output is received within the timeout:
 

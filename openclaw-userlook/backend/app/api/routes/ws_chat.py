@@ -1,4 +1,5 @@
 import json
+import logging
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from fastapi.encoders import jsonable_encoder
@@ -15,12 +16,14 @@ from app.schemas.message import WebSocketCancelRunMessage, WebSocketUserMessage
 from app.services.agent_service import user_can_access_agent
 from app.services.auth_service import get_user_by_id
 from app.services.conversation_service import require_conversation_for_user, save_message
-from app.services.file_service import list_gateway_upload_files, validate_user_upload_file_ids
+from app.services.daoban_service import is_daoban_agent, require_daoban_pdf, sync_daoban_files_to_workspace
+from app.services.file_service import files_to_gateway_payload, validate_and_bind_upload_files
 from app.services.gateway_session import build_gateway_session_identity, normalize_client_message_id
 from app.services.run_service import (
     create_task_run,
     get_task_run_by_client_message,
     get_task_run_detail,
+    mark_task_run_failed,
     request_task_run_cancel,
 )
 from app.services.task_executor import start_chat_run
@@ -28,6 +31,7 @@ from app.services.task_queue import task_queue
 from app.services.ws_connection_manager import connection_manager
 
 router = APIRouter(tags=["ws-chat"])
+logger = logging.getLogger(__name__)
 
 
 async def _close_with_error(websocket: WebSocket, message: str) -> None:
@@ -66,6 +70,22 @@ def _record_agent_call_audit(
         )
     )
     db.commit()
+
+
+def _http_exception_detail(exc: HTTPException, *, fallback_file_ids: list[int]) -> tuple[str, str, list[int]]:
+    if isinstance(exc.detail, dict):
+        message = str(
+            exc.detail.get("message")
+            or exc.detail.get("detail")
+            or "上传文件无效，请重新上传后再发送"
+        )
+        code = str(exc.detail.get("code") or "INVALID_FILE_RECORD")
+        invalid_file_ids = exc.detail.get("invalid_file_ids") or []
+        if not invalid_file_ids and exc.detail.get("file_id") is not None:
+            invalid_file_ids = [exc.detail["file_id"]]
+        return message, code, list(invalid_file_ids)
+    message = exc.detail if isinstance(exc.detail, str) else "上传文件无效，请重新上传后再发送"
+    return message, "INVALID_FILE_RECORD", fallback_file_ids
 
 
 @router.websocket("/ws/conversations/{conversation_id}")
@@ -194,22 +214,30 @@ async def chat_websocket(
                     )
                     continue
 
+                daoban_agent = is_daoban_agent(agent)
                 try:
-                    validate_user_upload_file_ids(db, current_user, inbound_message.file_ids)
-                    gateway_files = list_gateway_upload_files(
+                    upload_files = validate_and_bind_upload_files(
                         db,
                         current_user,
+                        conversation.id,
+                        inbound_message.file_ids,
+                    )
+                    if daoban_agent:
+                        require_daoban_pdf(upload_files)
+                    gateway_files = files_to_gateway_payload(upload_files)
+                    logger.info(
+                        "[chat-send] user_id=%s conversation_id=%s agent=%s file_ids=%s",
+                        current_user.id,
+                        conversation.id,
+                        agent.code,
                         inbound_message.file_ids,
                     )
                 except HTTPException as exc:
-                    if isinstance(exc.detail, dict):
-                        detail = str(exc.detail.get("detail") or "上传文件无效，请重新上传后再发送")
-                        code = str(exc.detail.get("code") or "INVALID_UPLOAD_FILES")
-                        invalid_file_ids = exc.detail.get("invalid_file_ids") or []
-                    else:
-                        detail = exc.detail if isinstance(exc.detail, str) else "上传文件无效，请重新上传后再发送"
-                        code = "INVALID_UPLOAD_FILES"
-                        invalid_file_ids = inbound_message.file_ids
+                    db.rollback()
+                    detail, code, invalid_file_ids = _http_exception_detail(
+                        exc,
+                        fallback_file_ids=inbound_message.file_ids,
+                    )
                     await send_json(
                         {
                             "type": "error",
@@ -241,6 +269,10 @@ async def chat_websocket(
                     gateway_session_key=provisional_identity.session_key,
                     idempotency_key=provisional_identity.idempotency_key,
                     raw_payload={
+                        "type": "user_message",
+                        "content": inbound_message.content,
+                        "file_ids": [file.id for file in upload_files],
+                        "files": gateway_files,
                         "channel": provisional_identity.channel,
                         "agent_code": provisional_identity.agent_code,
                         "openclaw_agent_id": provisional_identity.openclaw_agent_id,
@@ -265,26 +297,62 @@ async def chat_websocket(
                     **identity.model_dump(),
                     "status": "queued",
                 }
+                if daoban_agent:
+                    try:
+                        gateway_files, daoban_payload = sync_daoban_files_to_workspace(
+                            db,
+                            run=task_run,
+                            agent=agent,
+                            content=inbound_message.content,
+                            files=upload_files,
+                        )
+                    except HTTPException as exc:
+                        db.rollback()
+                        detail, code, invalid_file_ids = _http_exception_detail(
+                            exc,
+                            fallback_file_ids=inbound_message.file_ids,
+                        )
+                        task_run = db.get(type(task_run), task_run.id) or task_run
+                        task_run = mark_task_run_failed(db, task_run, detail)
+                        await send_json(
+                            {
+                                "type": "error",
+                                "code": code,
+                                "message": detail,
+                                "invalid_file_ids": invalid_file_ids,
+                                "conversation_id": conversation.id,
+                                "run_id": task_run.id,
+                                "client_message_id": client_message_id,
+                            }
+                        )
+                        continue
+                    task_run.raw_payload = {
+                        **(task_run.raw_payload or {}),
+                        **daoban_payload,
+                        "status": "queued",
+                    }
                 db.commit()
                 db.refresh(task_run)
 
+                message_raw_payload = {
+                    **(task_run.raw_payload or {}),
+                    "type": "user_message",
+                    "content": inbound_message.content,
+                    "file_ids": inbound_message.file_ids,
+                    "client_message_id": identity.client_message_id,
+                    "conversation_id": conversation.id,
+                    "run_id": task_run.id,
+                    "agent_code": agent.code,
+                    "openclaw_agent_id": agent.openclaw_agent_id,
+                    "gateway_session_key": identity.session_key,
+                    "idempotency_key": identity.idempotency_key,
+                }
                 save_message(
                     db,
                     conversation,
                     MessageRole.user,
                     inbound_message.content,
-                    raw_payload={
-                        "type": "user_message",
-                        "content": inbound_message.content,
-                        "file_ids": inbound_message.file_ids,
-                        "client_message_id": identity.client_message_id,
-                        "conversation_id": conversation.id,
-                        "run_id": task_run.id,
-                        "agent_code": agent.code,
-                        "openclaw_agent_id": agent.openclaw_agent_id,
-                        "gateway_session_key": identity.session_key,
-                        "idempotency_key": identity.idempotency_key,
-                    },
+                    raw_payload=message_raw_payload,
                     run_id=task_run.id,
                 )
                 _record_agent_call_audit(

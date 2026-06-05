@@ -17,6 +17,7 @@ const props = defineProps<{
   loading: boolean
   errorMessage: string
   attachedFiles: UserFile[]
+  agentCode?: string
   runId: number | null
   runStatus: TaskRunStatus | ''
   runStatusMessage: string
@@ -41,8 +42,8 @@ const scrollRef = ref<HTMLElement | null>(null)
 const uploadingFileCount = ref(0)
 
 const filesUploading = computed(() => uploadingFileCount.value > 0)
-const canSend = computed(() => props.connected && !filesUploading.value && draft.value.trim().length > 0)
-const canStop = computed(() => ['pending', 'queued', 'running', 'stale'].includes(props.runStatus))
+const canSend = computed(() => props.connected && !props.sending && !filesUploading.value && draft.value.trim().length > 0)
+const canStop = computed(() => props.runId !== null && ['pending', 'queued', 'running'].includes(props.runStatus))
 
 function send() {
   const content = draft.value.trim()
@@ -114,14 +115,6 @@ watch(
     </header>
 
     <div ref="scrollRef" class="message-list">
-      <el-alert
-        v-if="errorMessage"
-        class="chat-error"
-        :title="errorMessage"
-        type="error"
-        show-icon
-        :closable="false"
-      />
       <el-skeleton v-if="loading" :rows="5" animated />
       <div v-else-if="messages.length === 0" class="empty-chat">
         <h2>{{ title }}</h2>
@@ -138,14 +131,24 @@ watch(
     </div>
 
     <footer class="composer">
+      <el-alert
+        v-if="errorMessage"
+        class="composer-error"
+        :title="errorMessage"
+        type="error"
+        show-icon
+        :closable="false"
+      />
       <div v-if="sending" class="response-status">
-        Agent 正在响应<template v-if="activeRunCount > 1">（{{ activeRunCount }} 个任务进行中）</template>
+        <template v-if="runId">Agent 正在响应<template v-if="activeRunCount > 1">（{{ activeRunCount }} 个任务进行中）</template></template>
+        <template v-else>正在发送消息</template>
       </div>
       <div v-else-if="runStatusMessage" class="response-status">
         {{ runStatusMessage }}
       </div>
       <div class="attachment-row">
         <FileUploader
+          :agent-code="agentCode"
           @uploaded="(file) => emit('fileUploaded', file)"
           @uploading-change="onUploadingChange"
         />
@@ -289,7 +292,7 @@ p {
   background: #ffffff;
 }
 
-.chat-error,
+.composer-error,
 .response-status,
 .attachment-row {
   grid-column: 1 / -1;

@@ -21,6 +21,7 @@ from app.core.config import get_settings
 from app.models.agent import Agent
 from app.models.conversation import Conversation
 from app.models.user import User
+from app.services.daoban_service import build_daoban_gateway_message, is_daoban_agent
 from app.services.gateway_connection_pool import GatewayConnectionPool
 from app.services.gateway_session import GatewaySessionIdentity, build_gateway_session_identity
 
@@ -804,8 +805,10 @@ class OpenClawGatewayClient:
         message = self._build_gateway_message(
             content=content,
             user=user,
+            agent=agent,
             conversation=conversation,
             file_ids=file_ids,
+            files=files,
             run_id=run_id,
             output_dir=output_dir,
             client_message_id=identity.client_message_id,
@@ -861,8 +864,10 @@ class OpenClawGatewayClient:
         *,
         content: str,
         user: User,
+        agent: Agent,
         conversation: Conversation,
         file_ids: list[int],
+        files: list[dict[str, Any]],
         run_id: int | None,
         output_dir: str | None,
         client_message_id: str,
@@ -888,13 +893,27 @@ class OpenClawGatewayClient:
             context_lines.append(f"file_ids={','.join(str(file_id) for file_id in file_ids)}")
         if output_dir:
             context_lines.append(f"output_dir={output_dir}")
+        if is_daoban_agent(agent):
+            pdf_path = next(
+                (
+                    str(file.get("workspace_path") or file.get("path") or "")
+                    for file in files
+                    if str(file.get("mime_type") or "").lower() == "application/pdf"
+                    or str(file.get("file_type") or "").lower() == "pdf"
+                    or str(file.get("name") or file.get("original_name") or "").lower().endswith(".pdf")
+                ),
+                "",
+            )
+            if pdf_path:
+                context_lines.append(f"daoban_pdf_path={pdf_path}")
         context_lines.append("[/openclaw-userlook context]")
-        return "\n".join(context_lines) + "\n\n" + content
+        message_content = build_daoban_gateway_message(content, files) if is_daoban_agent(agent) else content
+        return "\n".join(context_lines) + "\n\n" + message_content
 
     def _build_attachments(self, files: list[dict[str, Any]]) -> list[dict[str, Any]]:
         attachments: list[dict[str, Any]] = []
         for file in files:
-            path = file.get("path") or file.get("stored_path")
+            path = file.get("workspace_path") or file.get("path") or file.get("stored_path") or file.get("storage_path")
             if not isinstance(path, str) or not path:
                 continue
             fallback_name = PureWindowsPath(path).name if "\\" in path else Path(path).name
@@ -903,10 +922,12 @@ class OpenClawGatewayClient:
                 "path": path,
                 "source": "openclaw-userlook",
             }
-            if file.get("file_type") is not None:
-                attachment["mimeType"] = file.get("file_type")
-            if file.get("file_size") is not None:
-                attachment["size"] = file.get("file_size")
+            mime_type = file.get("mime_type") or file.get("file_type")
+            if mime_type is not None:
+                attachment["mimeType"] = mime_type
+            size = file.get("size") or file.get("file_size")
+            if size is not None:
+                attachment["size"] = size
             attachments.append(attachment)
         return attachments
 

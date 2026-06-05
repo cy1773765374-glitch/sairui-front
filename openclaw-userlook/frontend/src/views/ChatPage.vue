@@ -513,7 +513,16 @@ function isInvalidUploadFilePayload(payload: ServerWsMessage) {
     return false
   }
   const code = String(payload.code ?? '').toLowerCase()
-  return code === 'invalid_upload_files' || code === 'invalid_file_ids' || payload.message === 'invalid file_ids'
+  return [
+    'invalid_upload_files',
+    'invalid_file_ids',
+    'invalid_file_record',
+    'file_content_missing',
+    'file_not_ready',
+    'file_conversation_mismatch',
+    'daoban_pdf_required',
+    'daoban_workspace_file_missing',
+  ].includes(code) || payload.message === 'invalid file_ids'
 }
 
 function removeInvalidAttachedFiles(invalidFileIds: number[] | undefined) {
@@ -802,19 +811,23 @@ function connectWebSocket(conversationId: number, isReconnect = false) {
       pendingSentFileIds.delete(payload.client_message_id)
     }
     errorMessage.value = payload.message
-    currentRunStatusMessage.value = payload.message
+    currentRunStatusMessage.value = ''
     const errorRunId = payload.run_id ?? currentRunId.value ?? undefined
     const target = findAssistantMessage(conversationId, null, errorRunId)
     if (target) {
       target.streaming = false
     }
     if (payload.run_id !== undefined) {
+      currentRunStatus.value = 'failed'
       markRunInactive(conversationId, payload.run_id)
     } else if (activeRuntime.value.activeRunIds.length === 0) {
       sending.value = false
+      activeRuntime.value.activeRunIds = []
+      currentRunId.value = null
     }
     if (!sending.value) {
       activeAssistantMessageId.value = null
+      stopRunPolling(conversationId)
     }
     if (payload.run_id !== undefined) {
       void reconcileCurrentRun(conversationId)
@@ -1132,8 +1145,8 @@ async function sendMessage(content: string, fileIds: number[], clearDraft: () =>
   outputFiles.value = []
   currentRunId.value = null
   currentClientMessageId.value = clientMessageId
-  currentRunStatus.value = 'queued'
-  currentRunStatusMessage.value = ''
+  currentRunStatus.value = ''
+  currentRunStatusMessage.value = '正在发送消息'
   getMessagesForConversation(conversation.value.id).push({
     id: `user-${clientMessageId}`,
     conversation_id: conversation.value.id,
@@ -1208,6 +1221,7 @@ function addUploadedFile(file: UserFile) {
     ElMessage.error('上传文件记录无效，请重新上传后再发送')
     return
   }
+  errorMessage.value = ''
   const normalizedFile = { ...file, id: Number(file.id) }
   if (!attachedFiles.value.some((item) => item.id === normalizedFile.id)) {
     attachedFiles.value.push(normalizedFile)
@@ -1216,6 +1230,9 @@ function addUploadedFile(file: UserFile) {
 
 function removeAttachedFile(fileId: number) {
   attachedFiles.value = attachedFiles.value.filter((file) => file.id !== fileId)
+  if (attachedFiles.value.length === 0) {
+    errorMessage.value = ''
+  }
 }
 
 function sanitizeFilenamePart(value: string) {
@@ -1417,6 +1434,7 @@ onBeforeUnmount(() => {
         :loading="loading"
         :error-message="errorMessage"
         :attached-files="attachedFiles"
+        :agent-code="agent?.code"
         :run-id="currentRunId"
         :run-status="currentRunStatus"
         :run-status-message="currentRunStatusMessage"

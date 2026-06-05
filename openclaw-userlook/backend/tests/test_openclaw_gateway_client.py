@@ -33,6 +33,16 @@ def make_agent() -> Agent:
     )
 
 
+def make_daoban_agent() -> Agent:
+    return Agent(
+        id=4,
+        code="image_daoban",
+        name="刀版合成 Agent",
+        openclaw_agent_id="image-daoban",
+        risk_level=AgentRiskLevel.medium,
+    )
+
+
 def make_conversation() -> Conversation:
     return Conversation(
         id=11,
@@ -227,6 +237,40 @@ class OpenClawGatewayClientTest(unittest.TestCase):
                 },
             ],
         )
+
+    def test_build_chat_request_for_daoban_uses_workspace_path_in_message_and_attachment(self) -> None:
+        client = OpenClawGatewayClient(ws_url="ws://127.0.0.1:18789")
+        pdf_path = "/home/cy/.openclaw/workspace-image-daoban/data/input/userlook/run-63/圣诞树挂卡.pdf"
+        payload = client._build_chat_request(
+            user=make_user(),
+            agent=make_daoban_agent(),
+            conversation=make_conversation(),
+            content="山水插画",
+            file_ids=[123],
+            files=[
+                {
+                    "id": 123,
+                    "name": "圣诞树挂卡.pdf",
+                    "workspace_path": pdf_path,
+                    "stored_path": "/data/openclaw-userlook/uploads/7/20260604/source.pdf",
+                    "file_type": "pdf",
+                    "mime_type": "application/pdf",
+                    "file_size": 733388,
+                }
+            ],
+            run_id=63,
+            output_dir=None,
+            client_message_id="client-1",
+            gateway_session_key=None,
+            idempotency_key=None,
+        )
+
+        message = payload["params"]["message"]
+        self.assertIn(f"daoban_pdf_path={pdf_path}", message)
+        self.assertIn("scripts/run_daoban_job.py", message)
+        self.assertIn(f'--pdf "{pdf_path}"', message)
+        self.assertEqual(payload["params"]["attachments"][0]["path"], pdf_path)
+        self.assertEqual(payload["params"]["attachments"][0]["mimeType"], "application/pdf")
 
     def test_ack_only_response_is_run_status_not_done(self) -> None:
         client = OpenClawGatewayClient(ws_url="ws://127.0.0.1:18789")

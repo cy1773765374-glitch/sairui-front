@@ -87,6 +87,7 @@ nano .env
 - `TASK_GLOBAL_CHAT_CONCURRENCY=3`
 - `USER_UPLOAD_ROOT=/data/openclaw-userlook/uploads`
 - `USER_OUTPUT_ROOT=/data/openclaw-userlook/outputs`
+- `OPENCLAW_DAOBAN_WORKSPACE=/home/cy/.openclaw/workspace-image-daoban`
 - `MAX_UPLOAD_MB=100`
 - 如启用企业微信 H5 登录，还需要配置 WeCom 相关变量。
 

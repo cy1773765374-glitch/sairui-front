@@ -5,18 +5,31 @@ export type FilePurpose = 'upload' | 'output' | 'temp'
 export interface UserFile {
   id: number
   user_id: number
+  conversation_id?: number | null
+  agent_code?: string | null
   original_name: string
+  stored_name?: string | null
   file_type: string
   mime_type?: string | null
   file_size: number
+  sha256?: string | null
+  status?: string
+  workspace_path?: string | null
   purpose: FilePurpose
   created_at: string
+  updated_at?: string | null
   download_url: string
 }
 
 export interface FileUploadResponse {
   file_id: number
   id?: number
+  name?: string
+  original_name?: string
+  size?: number
+  mime_type?: string | null
+  status?: string
+  workspace_path?: string | null
   file: UserFile
 }
 
@@ -35,9 +48,12 @@ export async function fetchFiles(): Promise<UserFile[]> {
   return response.data
 }
 
-export async function uploadFile(file: File): Promise<FileUploadResponse> {
+export async function uploadFile(file: File, agentCode?: string): Promise<FileUploadResponse> {
   const formData = new FormData()
   formData.append('upload', file)
+  if (agentCode) {
+    formData.append('agent_code', agentCode)
+  }
   const response = await apiClient.post<FileUploadResponse>('/api/files/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 120000,
