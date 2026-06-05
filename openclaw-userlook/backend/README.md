@@ -180,6 +180,7 @@ curl -X POST http://127.0.0.1:10009/api/admin/agents/main/permissions ^
 - `USER_UPLOAD_ROOT`
 - `USER_OUTPUT_ROOT`
 - `OPENCLAW_DAOBAN_WORKSPACE`
+- `PPT_GENERATION_WORKSPACE`
 - `MAX_UPLOAD_MB`
 
 ## Chat Gateway
@@ -204,6 +205,8 @@ For the knife-layout Agent (`image_daoban`, `image-daoban`, `daoban`, `workspace
 
 Current v1 behavior supersedes the previous knife-layout Gateway flow: `image_daoban` jobs are handled by `DaobanJobRunner`, not Gateway `chat.send`. The runner copies PDFs into `OPENCLAW_DAOBAN_WORKSPACE/data/input/userlook/run-{run_id}/`, executes `scripts/run_daoban_job.py` locally, writes outputs under `DAOBAN_OUTPUT_ROOT`, and uses `TASK_PENDING_CONTEXT_TTL_HOURS` for PDF-only or prompt-only pending context.
 
+PPT generation Agent aliases (`ppt_generation`, `ppt-generation`, `pptmaster`, `ppt-master`, `ppt`) use `PPTGenerationJobRunner`, not Gateway `chat.send`. The runner executes `scripts/generate_catalog_ppt.py --json` inside `PPT_GENERATION_WORKSPACE`, stores uploaded attachments only as message/run metadata, and writes the assistant reply as only the returned PPT path (`reply_text`, `windows_path`, or `pptx_path`). Current v1 does not parse uploaded file content for PPT generation; explicit requests to read an uploaded Excel/PDF/DOCX fail with a clear `PPT 生成失败：...` message.
+
 To inspect the live Gateway protocol without exposing credentials, run the probe script. It reuses the normal Gateway handshake, redacts token/password/signature/private-key-like fields, saves the outbound request plus the first 50 inbound frames, and exits non-zero when no assistant output is received within the timeout:
 
 ```bash
@@ -216,7 +219,7 @@ The current chat queue follows the OpenClaw Feishu/Lark plugin scheduling model 
 
 Stop requests use an abort fast-path through the active dispatcher and then persist the final `cancelled` status. The current queue is still in a single FastAPI process. Production deployments must keep one backend worker process; multi-worker or multi-instance queue coordination requires a later Redis, Celery, or database-backed queue design.
 
-The FastAPI lifespan watchdog scans old `running` and `queued` rows at startup and every `TASK_WATCHDOG_INTERVAL_SECONDS` seconds. Queued runs that exceed `TASK_QUEUE_TIMEOUT_SECONDS` become `timeout`; running runs that exceed `timeout_seconds` become `timeout`; running runs with stale heartbeat become `stale`. Watchdog updates do not overwrite terminal runs.
+The FastAPI lifespan watchdog scans old `running` and `queued` rows at startup and every `TASK_WATCHDOG_INTERVAL_SECONDS` seconds. Queued short-chat runs that exceed `TASK_QUEUE_TIMEOUT_SECONDS` become `timeout`; queued `long_job` runs are left to the in-process queue. Running runs that exceed `timeout_seconds` become `timeout`; running runs with stale heartbeat become `stale`. Watchdog updates do not overwrite terminal runs.
 
 Gateway failure is returned to the browser as:
 

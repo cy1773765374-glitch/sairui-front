@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 from fastapi import HTTPException, status
 
 from app.core.config import get_settings
 from app.models.agent import Agent
+from app.services.ppt_generation_service import is_ppt_generation_agent
 
 
 WORKSPACE_BY_AGENT = {
@@ -24,7 +26,12 @@ WORKSPACE_BY_AGENT = {
     "mysql_analysis": "/home/cy/.openclaw/workspace-huizong-ceshi",
     "huizong_ceshi": "/home/cy/.openclaw/workspace-huizong-ceshi",
     "huizong-ceshi": "/home/cy/.openclaw/workspace-huizong-ceshi",
-    "ppt_generation": "/home/cy/.openclaw/workspace",
+    "PPT-Generation": "/home/cy/.openclaw/workspace-PPT-Generation",
+    "ppt_generation": "/home/cy/.openclaw/workspace-PPT-Generation",
+    "ppt-generation": "/home/cy/.openclaw/workspace-PPT-Generation",
+    "pptmaster": "/home/cy/.openclaw/workspace-PPT-Generation",
+    "ppt-master": "/home/cy/.openclaw/workspace-PPT-Generation",
+    "ppt": "/home/cy/.openclaw/workspace-PPT-Generation",
 }
 
 
@@ -52,12 +59,18 @@ def agent_workspace_candidates(agent: Agent | None) -> list[str]:
 
 def resolve_agent_workspace(agent: Agent | None, *, require_exists: bool = False) -> Path:
     settings = get_settings()
-    workspace_value = (getattr(agent, "workspace_path", None) or "").strip() if agent is not None else ""
+    explicit_ppt_workspace = os.getenv("PPT_GENERATION_WORKSPACE")
+    if explicit_ppt_workspace and is_ppt_generation_agent(agent):
+        workspace_value = explicit_ppt_workspace.strip()
+    else:
+        workspace_value = (getattr(agent, "workspace_path", None) or "").strip() if agent is not None else ""
     if not workspace_value:
         for key in agent_workspace_candidates(agent):
             workspace_value = WORKSPACE_BY_AGENT.get(key, "")
             if workspace_value:
                 break
+    if not workspace_value and is_ppt_generation_agent(agent):
+        workspace_value = settings.ppt_generation_workspace
     if not workspace_value:
         workspace_value = settings.openclaw_default_workspace
 
