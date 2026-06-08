@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ from app.models.file import File, FilePurpose
 from app.models.user import User, UserRole, UserStatus
 from app.services.pending_task_service import consume_pending_task, save_pending_files, save_pending_text
 from app.services.runners.ppt_generation_job_runner import (
+    build_ppt_generation_env,
     build_ppt_generation_command,
     extract_json_object,
     ppt_failure_text,
@@ -253,6 +255,25 @@ class WorkspaceJobRunnerTest(unittest.TestCase):
             ppt_failure_text({"ok": False, "error": "图片生成失败"}),
             "PPT 生成失败：图片生成失败",
         )
+
+    def test_ppt_runner_env_prefers_workspace_venv_for_nested_python(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            venv_bin = workspace / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+            venv_bin.mkdir(parents=True)
+
+            env = build_ppt_generation_env(
+                workspace,
+                base_env={
+                    "PATH": "/usr/bin",
+                    "PYTHONHOME": "/unexpected/python",
+                },
+            )
+
+            self.assertEqual(env["PATH"].split(os.pathsep)[0], str(venv_bin))
+            self.assertEqual(env["VIRTUAL_ENV"], str(workspace / ".venv"))
+            self.assertEqual(env["PYTHONUNBUFFERED"], "1")
+            self.assertNotIn("PYTHONHOME", env)
 
     def test_router_selects_daoban_runner_without_gateway(self) -> None:
         from app.models.task_run import TaskRun, TaskRunStatus

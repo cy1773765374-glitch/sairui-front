@@ -51,6 +51,29 @@ def python_executable(workspace: Path) -> str:
     return "python3" if os.name != "nt" else "python"
 
 
+def _venv_bin_dir(workspace: Path) -> Path | None:
+    venv_bin = workspace / ".venv" / "bin"
+    if venv_bin.exists():
+        return venv_bin
+    windows_venv_bin = workspace / ".venv" / "Scripts"
+    if windows_venv_bin.exists():
+        return windows_venv_bin
+    return None
+
+
+def build_ppt_generation_env(workspace: Path, base_env: dict[str, str] | None = None) -> dict[str, str]:
+    env = dict(base_env or os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
+    env.pop("PYTHONHOME", None)
+
+    venv_bin = _venv_bin_dir(workspace)
+    if venv_bin is not None:
+        existing_path = env.get("PATH", "")
+        env["PATH"] = str(venv_bin) + (os.pathsep + existing_path if existing_path else "")
+        env["VIRTUAL_ENV"] = str(workspace / ".venv")
+    return env
+
+
 def build_ppt_generation_command(
     *,
     workspace: Path,
@@ -308,7 +331,7 @@ class PPTGenerationJobRunner(AgentRunner):
                 cwd=str(workspace),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                env=build_ppt_generation_env(workspace),
             )
             stdout_task = asyncio.create_task(read_stream(process.stdout, stdout_lines, "stdout"))
             stderr_task = asyncio.create_task(read_stream(process.stderr, stderr_lines, "stderr"))
