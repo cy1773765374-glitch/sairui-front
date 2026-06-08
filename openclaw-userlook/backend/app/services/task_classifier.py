@@ -10,6 +10,15 @@ from app.models.file import File
 from app.models.pending_task_input import PendingTaskInput
 from app.models.user import User
 from app.services.daoban_service import is_daoban_agent, is_pdf_file
+from app.services.mysql_analysis_service import (
+    MYSQL_ANALYSIS_DATE_REQUIRED_MESSAGE,
+    MYSQL_ANALYSIS_RUNNER_NAME,
+    MYSQL_ANALYSIS_TASK_TYPE,
+    has_mysql_report_intent,
+    is_mysql_analysis_agent,
+    is_mysql_help_intent,
+    parse_mysql_analysis_request,
+)
 from app.services.pending_task_service import get_pending_task
 from app.services.ppt_generation_service import (
     has_ppt_generation_intent,
@@ -48,6 +57,7 @@ class TaskClassification:
     selected_pending_file_id: int | None = None
     pending_task: PendingTaskInput | None = None
     task_type: str | None = None
+    metadata: dict[str, object] | None = None
 
 
 DAOBAN_TASK_TYPE = "daoban"
@@ -281,6 +291,39 @@ def classify_task(
                 effective_file_ids=effective_file_ids,
                 pending_task=pending,
                 task_type=PPT_TASK_TYPE,
+            )
+
+    if is_mysql_analysis_agent(agent):
+        if text_value and is_mysql_help_intent(text_value):
+            return TaskClassification(
+                task_kind=TaskKind.short_chat,
+                runner="gateway_chat",
+                reason="mysql_help_short_chat",
+                effective_content=text_value,
+                effective_file_ids=file_ids,
+                task_type=MYSQL_ANALYSIS_TASK_TYPE,
+            )
+
+        if text_value and has_mysql_report_intent(text_value):
+            parsed_request = parse_mysql_analysis_request(text_value)
+            if parsed_request is None:
+                return TaskClassification(
+                    task_kind=TaskKind.pending_input,
+                    runner="pending_input",
+                    reason="mysql_report_missing_date",
+                    response_message=MYSQL_ANALYSIS_DATE_REQUIRED_MESSAGE,
+                    effective_content=text_value,
+                    effective_file_ids=file_ids,
+                    task_type=MYSQL_ANALYSIS_TASK_TYPE,
+                )
+            return TaskClassification(
+                task_kind=TaskKind.long_job,
+                runner=MYSQL_ANALYSIS_RUNNER_NAME,
+                reason="mysql_report_intent",
+                effective_content=text_value,
+                effective_file_ids=file_ids,
+                task_type=MYSQL_ANALYSIS_TASK_TYPE,
+                metadata={"mysql_analysis": parsed_request.to_payload()},
             )
 
     execution_mode = (agent.execution_mode or "chat").strip().lower()

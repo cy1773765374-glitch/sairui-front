@@ -181,6 +181,8 @@ curl -X POST http://127.0.0.1:10009/api/admin/agents/main/permissions ^
 - `USER_OUTPUT_ROOT`
 - `OPENCLAW_DAOBAN_WORKSPACE`
 - `PPT_GENERATION_WORKSPACE`
+- `MYSQL_ANALYSIS_WORKSPACE`
+- `MYSQL_ANALYSIS_OUTPUT_ROOT`
 - `MAX_UPLOAD_MB`
 
 ## Chat Gateway
@@ -206,6 +208,8 @@ For the knife-layout Agent (`image_daoban`, `image-daoban`, `daoban`, `workspace
 Current v1 behavior supersedes the previous knife-layout Gateway flow: `image_daoban` jobs are handled by `DaobanJobRunner`, not Gateway `chat.send`. The runner copies PDFs into `OPENCLAW_DAOBAN_WORKSPACE/data/input/userlook/run-{run_id}/`, executes `scripts/run_daoban_job.py` locally, writes outputs under `DAOBAN_OUTPUT_ROOT`, and uses `TASK_PENDING_CONTEXT_TTL_HOURS` for PDF-only or prompt-only pending context.
 
 PPT generation Agent aliases (`ppt_generation`, `ppt-generation`, `pptmaster`, `ppt-master`, `ppt`) use `PPTGenerationJobRunner`, not Gateway `chat.send`. The runner executes `scripts/generate_catalog_ppt.py --json` inside `PPT_GENERATION_WORKSPACE`, stores uploaded attachments only as message/run metadata, and writes the assistant reply as only the returned PPT path (`reply_text`, `windows_path`, or `pptx_path`). Current v1 does not parse uploaded file content for PPT generation; explicit requests to read an uploaded Excel/PDF/DOCX fail with a clear `PPT 生成失败：...` message.
+
+MySQL analysis Agent aliases (`mysql_analysis`, `huizong-ceshi`, `mysql-analysis`, `mysql`, `MySQL分析`, or `汇总测试`) split short help messages from report jobs. Help or usage questions still use Gateway chat. Report requests with a parseable date range use `MySQLAnalysisJobRunner`, not Gateway `chat.send`; the runner executes `scripts/run_supplier_shipment_report.py` inside `MYSQL_ANALYSIS_WORKSPACE` or the configured Agent workspace, passes only `--start-date`, `--end-date`, `--asker`, `--question`, and optional `--union-id`, and writes the final assistant summary back to the same conversation. Output root resolution prefers the runner profile, workspace `.env` `OUTPUT_ROOT`, `MYSQL_ANALYSIS_OUTPUT_ROOT`, then `/data/share/yaq/test` and `/data/share/test`. Configure `MYSQL_ANALYSIS_OUTPUT_ROOT` in the backend environment when a custom workspace `.env` output root should also be downloadable through `/api/files/{file_id}/download`.
 
 To inspect the live Gateway protocol without exposing credentials, run the probe script. It reuses the normal Gateway handshake, redacts token/password/signature/private-key-like fields, saves the outbound request plus the first 50 inbound frames, and exits non-zero when no assistant output is received within the timeout:
 

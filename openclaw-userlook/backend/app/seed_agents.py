@@ -23,7 +23,7 @@ DEFAULT_AGENTS = [
     {
         "code": "mysql_analysis",
         "name": "MySQL 分析 Agent",
-        "description": "用于数据库分析与查询辅助的 Agent。",
+        "description": "用于供应商出货采购金额等 MySQL 报表分析，报表请求走本地长任务。",
         "category": "data",
         "openclaw_agent_id": "huizong-ceshi",
         "enabled": True,

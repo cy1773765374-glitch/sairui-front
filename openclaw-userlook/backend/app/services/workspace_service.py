@@ -7,6 +7,10 @@ from fastapi import HTTPException, status
 
 from app.core.config import get_settings
 from app.models.agent import Agent
+from app.services.mysql_analysis_service import (
+    MYSQL_ANALYSIS_WORKSPACE_CANDIDATES,
+    is_mysql_analysis_agent,
+)
 from app.services.ppt_generation_service import is_ppt_generation_agent
 
 
@@ -24,6 +28,8 @@ WORKSPACE_BY_AGENT = {
     "daoban": "/home/cy/.openclaw/workspace-image-daoban",
     "workspace-image-daoban": "/home/cy/.openclaw/workspace-image-daoban",
     "mysql_analysis": "/home/cy/.openclaw/workspace-huizong-ceshi",
+    "mysql-analysis": "/home/cy/.openclaw/workspace-huizong-ceshi",
+    "mysql": "/home/cy/.openclaw/workspace-huizong-ceshi",
     "huizong_ceshi": "/home/cy/.openclaw/workspace-huizong-ceshi",
     "huizong-ceshi": "/home/cy/.openclaw/workspace-huizong-ceshi",
     "PPT-Generation": "/home/cy/.openclaw/workspace-PPT-Generation",
@@ -59,6 +65,28 @@ def agent_workspace_candidates(agent: Agent | None) -> list[str]:
 
 def resolve_agent_workspace(agent: Agent | None, *, require_exists: bool = False) -> Path:
     settings = get_settings()
+    if is_mysql_analysis_agent(agent):
+        explicit_mysql_workspace = os.getenv("MYSQL_ANALYSIS_WORKSPACE", "").strip()
+        agent_workspace = (getattr(agent, "workspace_path", None) or "").strip() if agent is not None else ""
+        candidates = [explicit_mysql_workspace, agent_workspace, *MYSQL_ANALYSIS_WORKSPACE_CANDIDATES]
+        fallback = next((value for value in candidates if value), settings.openclaw_default_workspace)
+        for candidate in candidates:
+            workspace_value = (candidate or "").strip()
+            if not workspace_value:
+                continue
+            path = Path(workspace_value).expanduser()
+            if path.exists() or not require_exists:
+                return path
+        path = Path(fallback).expanduser()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "AGENT_WORKSPACE_MISSING",
+                "message": f"Agent workspace 不存在：{path}",
+                "workspace_path": str(path),
+            },
+        )
+
     explicit_ppt_workspace = os.getenv("PPT_GENERATION_WORKSPACE")
     if explicit_ppt_workspace and is_ppt_generation_agent(agent):
         workspace_value = explicit_ppt_workspace.strip()

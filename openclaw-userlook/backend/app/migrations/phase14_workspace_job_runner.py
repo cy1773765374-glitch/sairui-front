@@ -17,6 +17,8 @@ WORKSPACE_BY_CODE = {
     "image_daoban": ("/home/cy/.openclaw/workspace-image-daoban", "job"),
     "image-daoban": ("/home/cy/.openclaw/workspace-image-daoban", "job"),
     "mysql_analysis": ("/home/cy/.openclaw/workspace-huizong-ceshi", "auto"),
+    "mysql-analysis": ("/home/cy/.openclaw/workspace-huizong-ceshi", "auto"),
+    "mysql": ("/home/cy/.openclaw/workspace-huizong-ceshi", "auto"),
     "huizong_ceshi": ("/home/cy/.openclaw/workspace-huizong-ceshi", "auto"),
     "huizong-ceshi": ("/home/cy/.openclaw/workspace-huizong-ceshi", "auto"),
     "ppt_generation": ("/home/cy/.openclaw/workspace-PPT-Generation", "job"),
