@@ -40,6 +40,7 @@ RAW_PAYLOAD_COMPACT_KEYS = (
     "task_kind",
     "runner_name",
     "workspace_path",
+    "output_root",
     "phase",
     "progress_message",
     "duration_seconds",

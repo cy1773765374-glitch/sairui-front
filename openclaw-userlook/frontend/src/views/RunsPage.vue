@@ -151,6 +151,9 @@ function runnerLabel(row: TaskRun) {
   if (row.runner_name === 'daoban_job') {
     return '刀版本地生成'
   }
+  if (row.runner_name === 'mysql_analysis_job') {
+    return 'MySQL 本地分析'
+  }
   if (row.runner_name === 'gateway_chat') {
     return 'Gateway 对话'
   }

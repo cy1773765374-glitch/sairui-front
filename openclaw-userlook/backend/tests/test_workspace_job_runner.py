@@ -11,6 +11,14 @@ from app.models.agent import Agent, AgentRiskLevel
 from app.models.conversation import Conversation
 from app.models.file import File, FilePurpose
 from app.models.user import User, UserRole, UserStatus
+from app.services.file_service import _allowed_output_roots
+from app.services.mysql_analysis_service import (
+    MYSQL_ANALYSIS_TASK_TYPE,
+    build_mysql_analysis_command,
+    build_mysql_success_text,
+    parse_mysql_analysis_request,
+    sanitize_mysql_analysis_text,
+)
 from app.services.pending_task_service import consume_pending_task, save_pending_files, save_pending_text
 from app.services.runners.ppt_generation_job_runner import (
     build_ppt_generation_env,
@@ -38,6 +46,8 @@ class WorkspaceJobRunnerTest(unittest.TestCase):
             ("xingzheng", "xingzheng_a", "/home/cy/.openclaw/workspace-xingzheng_a"),
             ("image_daoban", "image-daoban", "/home/cy/.openclaw/workspace-image-daoban"),
             ("mysql_analysis", "huizong-ceshi", "/home/cy/.openclaw/workspace-huizong-ceshi"),
+            ("mysql-analysis", "mysql-analysis", "/home/cy/.openclaw/workspace-huizong-ceshi"),
+            ("mysql", "mysql", "/home/cy/.openclaw/workspace-huizong-ceshi"),
             ("ppt_generation", "ppt-generation", "/home/cy/.openclaw/workspace-PPT-Generation"),
             ("pptmaster", "ppt-master", "/home/cy/.openclaw/workspace-PPT-Generation"),
         ]
@@ -321,6 +331,147 @@ class WorkspaceJobRunnerTest(unittest.TestCase):
         )
         self.assertEqual(AgentRunnerRouter().select_runner(run=run, agent=agent).name, "ppt_generation_job")
 
+    def test_task_classifier_mysql_help_stays_gateway(self) -> None:
+        with self.session_factory() as db:
+            user, agent, conversation = self._seed_mysql_user_agent_conversation(db)
+            result = classify_task(
+                db,
+                user=user,
+                agent=agent,
+                conversation_id=conversation.id,
+                content="你是谁",
+                files=[],
+            )
+            self.assertEqual(result.task_kind, TaskKind.short_chat)
+            self.assertEqual(result.runner, "gateway_chat")
+
+    def test_task_classifier_mysql_report_missing_date_is_pending_input(self) -> None:
+        with self.session_factory() as db:
+            user, agent, conversation = self._seed_mysql_user_agent_conversation(db)
+            result = classify_task(
+                db,
+                user=user,
+                agent=agent,
+                conversation_id=conversation.id,
+                content="帮我统计供应商出货采购金额",
+                files=[],
+            )
+            self.assertEqual(result.task_kind, TaskKind.pending_input)
+            self.assertEqual(result.runner, "pending_input")
+            self.assertEqual(result.task_type, MYSQL_ANALYSIS_TASK_TYPE)
+            self.assertIn("需要开始日期和结束日期", result.response_message or "")
+
+    def test_task_classifier_mysql_report_runs_local_job(self) -> None:
+        with self.session_factory() as db:
+            user, agent, conversation = self._seed_mysql_user_agent_conversation(db)
+            result = classify_task(
+                db,
+                user=user,
+                agent=agent,
+                conversation_id=conversation.id,
+                content="统计 2026-05-01 到 2026-05-31 的供应商出货采购金额，并生成 Excel 和图表",
+                files=[],
+            )
+            self.assertEqual(result.task_kind, TaskKind.long_job)
+            self.assertEqual(result.runner, "mysql_analysis_job")
+            self.assertEqual(result.task_type, MYSQL_ANALYSIS_TASK_TYPE)
+            self.assertEqual(result.metadata["mysql_analysis"]["start_date"], "2026-05-01")
+            self.assertEqual(result.metadata["mysql_analysis"]["end_date"], "2026-05-31")
+
+    def test_mysql_date_and_union_parsing(self) -> None:
+        from datetime import datetime
+
+        explicit = parse_mysql_analysis_request("统计 2026-05-01 到 2026-05-31 的供应商出货采购金额")
+        self.assertEqual(explicit.start_date, "2026-05-01")
+        self.assertEqual(explicit.end_date, "2026-05-31")
+
+        chinese_month = parse_mysql_analysis_request("查一下 2026年5月供应商出货采购金额Top10")
+        self.assertEqual(chinese_month.start_date, "2026-05-01")
+        self.assertEqual(chinese_month.end_date, "2026-05-31")
+
+        current_year = parse_mysql_analysis_request("今年5月供应商出货采购金额Top10", now=datetime(2026, 6, 8))
+        self.assertEqual(current_year.start_date, "2026-05-01")
+        self.assertEqual(current_year.default_year, 2026)
+
+        month_only = parse_mysql_analysis_request("5月供应商出货采购金额Top10", now=datetime(2026, 6, 8))
+        self.assertEqual(month_only.start_date, "2026-05-01")
+        self.assertEqual(month_only.end_date, "2026-05-31")
+        self.assertEqual(month_only.default_year, 2026)
+
+        with_union = parse_mysql_analysis_request("统计 unionId=1001 在 2026-05-01 到 2026-05-31 的供应商 Top10")
+        self.assertEqual(with_union.union_id, "1001")
+
+    def test_mysql_runner_builds_safe_command(self) -> None:
+        command = build_mysql_analysis_command(
+            workspace=Path("/home/cy/.openclaw/workspace-huizong-ceshi"),
+            start_date="2026-05-01",
+            end_date="2026-05-31",
+            union_id="1001",
+            asker="Alice",
+            question="统计 unionId=1001 在 2026-05-01 到 2026-05-31 的供应商 Top10",
+        )
+        self.assertIn("scripts/run_supplier_shipment_report.py", command)
+        self.assertIn("--start-date", command)
+        self.assertIn("2026-05-01", command)
+        self.assertIn("--end-date", command)
+        self.assertIn("--union-id", command)
+        self.assertIn("1001", command)
+        self.assertNotIn(" ".join(command), command)
+
+    def test_router_selects_mysql_runner_without_gateway(self) -> None:
+        from app.models.task_run import TaskRun, TaskRunStatus
+
+        agent = Agent(
+            id=5,
+            code="mysql_analysis",
+            name="MySQL 分析 Agent",
+            openclaw_agent_id="huizong-ceshi",
+            risk_level=AgentRiskLevel.high,
+        )
+        run = TaskRun(
+            id=9,
+            user_id=1,
+            agent_id=agent.id,
+            conversation_id=1,
+            status=TaskRunStatus.queued,
+            input_text="统计 2026-05-01 到 2026-05-31 的供应商出货采购金额",
+            run_type="job",
+            priority=100,
+            runner_name="mysql_analysis_job",
+        )
+        self.assertEqual(AgentRunnerRouter().select_runner(run=run, agent=agent).name, "mysql_analysis_job")
+
+    def test_mysql_success_text_and_sanitizer(self) -> None:
+        from datetime import datetime
+
+        parsed = parse_mysql_analysis_request("统计 5月供应商出货采购金额", now=datetime(2026, 6, 8))
+        with tempfile.TemporaryDirectory() as output_dir:
+            root = Path(output_dir)
+            (root / "report_summary.md").write_text("摘要", encoding="utf-8")
+            (root / "run_meta.json").write_text("{}", encoding="utf-8")
+            text = build_mysql_success_text(parsed_request=parsed, output_dir=root, report_summary="摘要")
+            self.assertIn("供应商出货统计完成", text)
+            self.assertIn("已按 2026 年 5 月处理", text)
+            self.assertIn("report_summary.md", text)
+
+        sanitized = sanitize_mysql_analysis_text("MYSQL_PASSWORD=abc token:secret mysql+pymysql://u:p@host/db")
+        self.assertNotIn("abc", sanitized)
+        self.assertNotIn("secret", sanitized)
+        self.assertNotIn(":p@", sanitized)
+
+    def test_mysql_output_root_is_allowed_when_env_configured(self) -> None:
+        old_value = os.environ.get("MYSQL_ANALYSIS_OUTPUT_ROOT")
+        try:
+            with tempfile.TemporaryDirectory() as output_root:
+                os.environ["MYSQL_ANALYSIS_OUTPUT_ROOT"] = output_root
+                roots = _allowed_output_roots(7)
+                self.assertIn(Path(output_root).resolve(), roots)
+        finally:
+            if old_value is None:
+                os.environ.pop("MYSQL_ANALYSIS_OUTPUT_ROOT", None)
+            else:
+                os.environ["MYSQL_ANALYSIS_OUTPUT_ROOT"] = old_value
+
 
     def _seed_user_agent_conversation(self, db):
         user = User(
@@ -375,6 +526,35 @@ class WorkspaceJobRunnerTest(unittest.TestCase):
             agent_id=agent.id,
             title="PPT",
             session_key="web:7:ppt_generation:20",
+        )
+        db.add_all([user, agent, conversation])
+        db.commit()
+        return user, agent, conversation
+
+    def _seed_mysql_user_agent_conversation(self, db):
+        user = User(
+            id=7,
+            username="alice",
+            password_hash="x",
+            display_name="Alice",
+            status=UserStatus.active,
+            role=UserRole.user,
+        )
+        agent = Agent(
+            id=5,
+            code="mysql_analysis",
+            name="MySQL 分析 Agent",
+            openclaw_agent_id="huizong-ceshi",
+            risk_level=AgentRiskLevel.high,
+            workspace_path="/home/cy/.openclaw/workspace-huizong-ceshi",
+            execution_mode="auto",
+        )
+        conversation = Conversation(
+            id=21,
+            user_id=user.id,
+            agent_id=agent.id,
+            title="MySQL",
+            session_key="web:7:mysql_analysis:21",
         )
         db.add_all([user, agent, conversation])
         db.commit()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import hashlib
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -15,6 +16,7 @@ from app.core.config import get_settings
 from app.models.file import File, FilePurpose, FileStatus
 from app.models.user import User, UserRole
 from app.schemas.file import FileRead
+from app.services.mysql_analysis_service import MYSQL_ANALYSIS_DEFAULT_OUTPUT_ROOTS
 
 ALLOWED_EXTENSIONS = {
     "txt",
@@ -93,9 +95,18 @@ def _is_relative_to(path: Path, root: Path) -> bool:
 def _allowed_output_roots(user_id: int) -> list[Path]:
     settings = get_settings()
     roots = [(_resolve_root(settings.user_output_root) / str(user_id)).resolve()]
-    daoban_root = _resolve_root(settings.openclaw_daoban_output_root)
-    if daoban_root not in roots:
-        roots.append(daoban_root)
+    shared_roots = [
+        settings.openclaw_daoban_output_root,
+        os.getenv("MYSQL_ANALYSIS_OUTPUT_ROOT", ""),
+        settings.mysql_analysis_output_root,
+        *MYSQL_ANALYSIS_DEFAULT_OUTPUT_ROOTS,
+    ]
+    for root_value in shared_roots:
+        if not root_value:
+            continue
+        root = _resolve_root(root_value)
+        if root not in roots:
+            roots.append(root)
     return roots
 
 

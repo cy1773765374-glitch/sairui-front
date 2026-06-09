@@ -354,6 +354,7 @@ async def chat_websocket(
                         "task_type": classification.task_type,
                         "runner_name": classification.runner,
                         "classification_reason": classification.reason,
+                        **(classification.metadata or {}),
                         "selected_pending_file_id": classification.selected_pending_file_id,
                         "conversation_id": conversation.id,
                         "client_message_id": provisional_identity.client_message_id,
@@ -379,6 +380,7 @@ async def chat_websocket(
                     "task_type": classification.task_type,
                     "runner_name": classification.runner,
                     "classification_reason": classification.reason,
+                    **(classification.metadata or {}),
                     "status": "queued",
                 }
                 db.commit()

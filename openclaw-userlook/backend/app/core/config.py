@@ -80,6 +80,7 @@ class Settings(BaseSettings):
         default="/home/cy/.openclaw/workspace-PPT-Generation",
         alias="PPT_GENERATION_WORKSPACE",
     )
+    mysql_analysis_output_root: str = Field(default="", alias="MYSQL_ANALYSIS_OUTPUT_ROOT")
     openclaw_daoban_output_root: str = Field(
         default="/data/share/yaq/test",
         alias="DAOBAN_OUTPUT_ROOT",
