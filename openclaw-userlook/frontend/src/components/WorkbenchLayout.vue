@@ -177,6 +177,7 @@ onBeforeUnmount(() => {
 }
 
 .workbench-sidebar--collapsed .brand {
+  position: relative;
   flex-direction: column;
   justify-content: center;
   gap: 8px;
@@ -226,7 +227,35 @@ onBeforeUnmount(() => {
 }
 
 .workbench-sidebar--collapsed .sidebar-toggle {
-  margin-left: 0;
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  border-color: #d9dce3;
+  background: rgb(255 255 255 / 92%);
+  box-shadow: 0 2px 10px rgb(60 64 67 / 16%);
+  color: #3c4043;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%);
+  transition:
+    opacity 0.16s ease,
+    background-color 0.16s ease,
+    border-color 0.16s ease;
+}
+
+.workbench-sidebar--collapsed .brand:hover .sidebar-toggle,
+.workbench-sidebar--collapsed .sidebar-toggle:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.workbench-sidebar--collapsed .sidebar-toggle:hover,
+.workbench-sidebar--collapsed .sidebar-toggle:focus-visible {
+  border-color: #c8ccd5;
+  background: #fff;
 }
 
 .brand-copy span {
@@ -363,7 +392,11 @@ onBeforeUnmount(() => {
   }
 
   .workbench-sidebar--collapsed .sidebar-toggle {
+    position: static;
     margin-left: auto;
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
   }
 
   .side-menu {
